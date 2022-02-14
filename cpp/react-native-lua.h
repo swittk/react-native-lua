@@ -1,8 +1,8 @@
-#ifndef EXAMPLE_H
-#define EXAMPLE_H
+#ifndef SKRNNATIVELUA_H
+#define SKRNNATIVELUA_H
 
-namespace example {
+namespace SKRNNativeLua {
   int multiply(float a, float b);
 }
 
-#endif /* EXAMPLE_H */
+#endif /* SKRNNATIVELUA_H */

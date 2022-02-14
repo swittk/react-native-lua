@@ -11,7 +11,7 @@ RCT_EXPORT_METHOD(multiply:(nonnull NSNumber*)a withB:(nonnull NSNumber*)b
                   withResolver:(RCTPromiseResolveBlock)resolve
                   withReject:(RCTPromiseRejectBlock)reject)
 {
-    NSNumber *result = @(example::multiply([a floatValue], [b floatValue]));
+    NSNumber *result = @(SKRNNativeLua::multiply([a floatValue], [b floatValue]));
 
     resolve(result);
 }
