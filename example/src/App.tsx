@@ -16,8 +16,8 @@ b = a ^ 2
 a = b * 20
     `);
     interp.getglobal('a');
-    // const a = interp.tointeger(-1);
-    // console.log('got a', a);
+    const a = interp.tointeger(-1);
+    console.log('got a', a);
     console.log('uppermost type', interp.typename(interp.type(-1)));
   })
 

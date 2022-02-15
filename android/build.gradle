@@ -1,3 +1,25 @@
+import java.nio.file.Paths
+
+static def findNodeModules(baseDir) {
+  def basePath = baseDir.toPath().normalize()
+  // Node's module resolution algorithm searches up to the root directory,
+  // after which the base path will be null
+  while (basePath) {
+    def nodeModulesPath = Paths.get(basePath.toString(), "node_modules")
+    def reactNativePath = Paths.get(nodeModulesPath.toString(), "react-native")
+    if (nodeModulesPath.toFile().exists() && reactNativePath.toFile().exists()) {
+      return nodeModulesPath.toString()
+    }
+    basePath = basePath.getParent()
+  }
+  throw new GradleException("ReactNativeNativeVideo: Failed to find node_modules/ path!")
+}
+
+def nodeModules = findNodeModules(projectDir)
+def reactProperties = new Properties()
+file("$nodeModules/react-native/ReactAndroid/gradle.properties").withInputStream { reactProperties.load(it) }
+def REACT_NATIVE_VERSION = reactProperties.getProperty("VERSION_NAME").split("\\.")[1].toInteger()
+
 buildscript {
     if (project == rootProject) {
         repositories {
@@ -17,9 +39,13 @@ apply plugin: 'com.android.library'
 def safeExtGet(prop, fallback) {
     rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
 }
+def getExtOrDefaultValue(name, defaultValue) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : defaultValue
+}
 
 android {
     compileSdkVersion safeExtGet('Lua_compileSdkVersion', 29)
+    ndkVersion getExtOrDefaultValue('ndkVersion', '21.4.7075529')
     defaultConfig {
         minSdkVersion safeExtGet('Lua_minSdkVersion', 16)
         targetSdkVersion safeExtGet('Lua_targetSdkVersion', 29)
@@ -30,6 +56,9 @@ android {
             cmake {
                 cppFlags "-O2 -frtti -fexceptions -Wall -fstack-protector-all"
                 abiFilters 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
+              arguments "-DNODE_MODULES_DIR=${nodeModules.toString()}",
+                // This is how the REACT_NATIVE_VERSION magic variable appears in our CMAKELISTS file
+                "-DREACT_NATIVE_VERSION=${REACT_NATIVE_VERSION}"
             }
         }
 

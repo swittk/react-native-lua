@@ -2,6 +2,7 @@ package com.reactnativelua;
 
 import androidx.annotation.NonNull;
 
+import com.facebook.react.bridge.JavaScriptContextHolder;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
@@ -10,24 +11,33 @@ import com.facebook.react.module.annotations.ReactModule;
 
 @ReactModule(name = LuaModule.NAME)
 public class LuaModule extends ReactContextBaseJavaModule {
-    public static final String NAME = "Lua";
+    public static final String NAME = "SKNativeLua";
+
+    static {
+        try {
+            // Used to load the 'native-lib' library on application startup.
+            System.loadLibrary("SKRNNativeLua");
+        } catch (Exception ignored) {
+        }
+    }
+
+  private final ReactApplicationContext reactContext;
 
     public LuaModule(ReactApplicationContext reactContext) {
-        super(reactContext);
+      super(reactContext);
+      this.reactContext = reactContext;
     }
+
+    public static native int nativeMultiply(int a, int b);
+
+  private static native void initialize(long jsiRuntimePointer);
+
+  private static native void cleanup(long jsiRuntimePointer);
 
     @Override
     @NonNull
     public String getName() {
         return NAME;
-    }
-
-    static {
-        try {
-            // Used to load the 'native-lib' library on application startup.
-            System.loadLibrary("cpp");
-        } catch (Exception ignored) {
-        }
     }
 
     // Example method
@@ -37,5 +47,21 @@ public class LuaModule extends ReactContextBaseJavaModule {
         promise.resolve(nativeMultiply(a, b));
     }
 
-    public static native int nativeMultiply(int a, int b);
+  // This method is called automatically (defined in BaseJavaModule.java)
+  // "called on the appropriate method when a life cycle event occurs.
+  @Override
+  public void initialize() {
+    ReactApplicationContext context = this.reactContext;
+    JavaScriptContextHolder jsContext = context.getJavaScriptContextHolder();
+    LuaModule.initialize(jsContext.get());
+  }
+
+  // This method is called automatically (defined in BaseJavaModule.java)
+  // "called on the appropriate method when a life cycle event occurs.
+  // This method is equivalent to Objective-C's 'invalidate'
+  @Override
+  public void onCatalystInstanceDestroy() {
+    LuaModule.cleanup(this.reactContext.getJavaScriptContextHolder().get());
+    // FlexibleHttpModule.cleanup(this.getReactApplicationContext());
+  }
 }
