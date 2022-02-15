@@ -1,7 +1,8 @@
 # react-native-lua
 
-Native Lua in React Native (WIP)
+Native Lua in React Native
 Heavily based on React Native JSI 😅.
+Working in both iOS and Android.
 
 Lots of inspiration from [ObjC-Lua](https://github.com/PedestrianSean/ObjC-Lua) and [ilua](https://github.com/profburke/ilua).
 
@@ -14,14 +15,29 @@ The Lua source version (as of February 2022) is `5.4.4`.
 npm install react-native-lua
 ```
 
+#### iOS
+```
+cd ios && pod install
+```
+#### Android
+You need NDK installed. That's it.
+
 ## Usage
 
+Methods can be seen in the types.
+
+Almost all methods are simply the same as known C api methods of the pattern `lua_${methodName}`, sans the `lua_` prefix.
+
 ```js
-import { multiply } from "react-native-lua";
-
-// ...
-
-const result = await multiply(3, 7);
+import { luaInterpreter } from "react-native-lua";
+// Create a new interpreter
+const interp = luaInterpreter();
+// this is equivalent to lua_dostring
+interp.dostring(`a = 2
+b = a ^ 2
+a = b * 20
+    `);
+// The rest is up to you!
 ```
 
 ## Contributing
