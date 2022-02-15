@@ -6,8 +6,8 @@ const LINKING_ERROR =
   '- You rebuilt the app after installing the package\n' +
   '- You are not using Expo managed workflow\n';
 
-const Lua = NativeModules.Lua
-  ? NativeModules.Lua
+const Lua = NativeModules.SKNativeLua
+  ? NativeModules.SKNativeLua
   : new Proxy(
     {},
     {
@@ -71,4 +71,8 @@ export interface LuaInterpreter {
   type(arg0: number): number,
   typename(arg0: number): string,
   yield(): number
+}
+
+export function luaInterpreter(): LuaInterpreter {
+  return (global as any).SKRNNativeLuaNewInterpreter();
 }

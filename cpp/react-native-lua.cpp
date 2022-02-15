@@ -1,7 +1,9 @@
 #include "react-native-lua.h"
-#include "luaSrc/lua.h"
-#include "luaSrc/lauxlib.h"
-#include "luaSrc/lualib.h"
+extern "C" {
+#include "lua_src/lua.h"
+#include "lua_src/lauxlib.h"
+#include "lua_src/lualib.h"
+}
 #include <jsi/jsi.h>
 #include "CPPNumericStringHashCompare.h"
 
@@ -21,6 +23,28 @@ capture \
 namespace SKRNNativeLua {
 using namespace facebook;
 
+void install(facebook::jsi::Runtime &jsiRuntime) {
+    using namespace jsi;
+    auto newInterpreterFunction =
+    jsi::Function::createFromHostFunction(
+                                          jsiRuntime,
+                                          PropNameID::forAscii(jsiRuntime, "SKRNNativeLuaNewInterpreter"),
+                                          0,
+                                          //                                          [&, invoker](Runtime &runtime, const Value &thisValue, const Value *arguments,
+                                          [&](Runtime &runtime, const Value &thisValue, const Value *arguments,
+                                                                size_t count) -> Value
+                                          {
+                                              jsi::Object object = jsi::Object::createFromHostObject(runtime, std::make_shared<SKRNLuaInterpreter>());
+                                              return object;
+                                          });
+    jsiRuntime.global().setProperty(jsiRuntime, "SKRNNativeLuaNewInterpreter",
+                                    std::move(newInterpreterFunction));
+
+}
+//void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
+void cleanup(facebook::jsi::Runtime &jsiRuntime) {
+    
+}
 int multiply(float a, float b) {
     return a * b;
 }

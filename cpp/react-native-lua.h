@@ -18,7 +18,8 @@ struct lua_State;
 namespace SKRNNativeLua {
   int multiply(float a, float b);
 
-class SKRNLuaInterpreter : facebook::jsi::HostObject {
+class SKRNLuaInterpreter : public facebook::jsi::HostObject {
+public:
     lua_State *_state;
     
     
@@ -47,6 +48,10 @@ class SKRNLuaInterpreter : facebook::jsi::HostObject {
     facebook::jsi::Value get(facebook::jsi::Runtime &runtime, const facebook::jsi::PropNameID &name);
     std::vector<facebook::jsi::PropNameID> getPropertyNames(facebook::jsi::Runtime& rt);
 };
+
+void install(facebook::jsi::Runtime &jsiRuntime);
+//void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
+void cleanup(facebook::jsi::Runtime &jsiRuntime);
 }
 
 #endif /* SKRNNATIVELUA_H */

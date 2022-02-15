@@ -6,6 +6,6 @@
 
 #endif
 
-@interface Lua : NSObject <RCTBridgeModule>
-
+@interface SKNativeLua : NSObject <RCTBridgeModule>
+@property (nonatomic, assign) BOOL setBridgeOnMainQueue;
 @end
