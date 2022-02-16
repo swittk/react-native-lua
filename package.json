@@ -1,6 +1,6 @@
 {
   "name": "react-native-lua",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Native Lua in React Native",
   "main": "lib/commonjs/index",
   "module": "lib/module/index",
