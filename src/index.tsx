@@ -35,8 +35,15 @@ export enum LUA_TYPE {
 }
 
 export interface LuaInterpreter {
-  dostring(string: string): void,
-  dofile(filepath: string): void,
+  dostring(string: string): number,
+  dofile(filepath: string): number,
+
+  /** The number of printed strings */
+  printCount: number;
+  /** Pop printed strings out by the count value specified
+   * If count is not specified, pops out all strings.
+   */
+  getPrint(count?: number): string[];
 
   pop(arg0: number): void,
   pushboolean(arg0: number): void,

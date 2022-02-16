@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <jsi/jsi.h>
+#include <deque>
 //#include "luaSrc/lua.h"
 
 namespace facebook {
@@ -21,7 +22,9 @@ namespace SKRNNativeLua {
 class SKRNLuaInterpreter : public facebook::jsi::HostObject {
 public:
     lua_State *_state;
-    
+    std::shared_ptr<facebook::react::CallInvoker> jsInvoker_;
+    std::deque<std::string> printOutput;
+    int maxPrintOutputCount = 100;
     
 #pragma mark - LifeCycle Methods
     SKRNLuaInterpreter() {
@@ -41,6 +44,8 @@ public:
     int doString(std::string str);
     int doFile(std::string filePath);
     std::string getLatestError();
+    static int staticLuaPrintHandler(lua_State *L);
+    void luaPrintHandler(std::string str);
 #pragma mark - Helper Methods
     
     

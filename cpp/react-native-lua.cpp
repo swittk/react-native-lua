@@ -6,6 +6,7 @@ extern "C" {
 }
 #include <jsi/jsi.h>
 #include "CPPNumericStringHashCompare.h"
+#include <sstream>
 
 #define EZ_JSI_HOST_FN_TEMPLATE(numArgs, capture) jsi::Function::createFromHostFunction\
 (runtime, name, numArgs,\
@@ -49,10 +50,46 @@ int multiply(float a, float b) {
     return a * b;
 }
 
+// Inspired by answer to https://stackoverflow.com/a/4514193/4469172
+int SKRNLuaInterpreter::staticLuaPrintHandler(lua_State *L) {
+    SKRNLuaInterpreter *me = (SKRNLuaInterpreter *)lua_touserdata(L, lua_upvalueindex(1));
+    int nargs = lua_gettop(L);
+    std::stringstream outStr;
+    for (int i=1; i <= nargs; i++) {
+        // Mimicking what luaB_print does; add a \t if it's idx > 1
+        if(i > 1) {
+            outStr << "\t";
+        }
+        
+        if (lua_isstring(L, i)) {
+            /* Pop the next arg using lua_tostring(L, i) and do your print */
+            const char *str = lua_tostring(L, i);
+            outStr << str;
+        }
+        else {
+            // Mimicking what luaB_print does; convert to string and just print
+            size_t strSize = 0;
+            const char *s = lua_tolstring(L, i, &strSize);
+            outStr << std::string(s, strSize);
+        }
+    }
+    me->luaPrintHandler(outStr.str());
+    return 0;
+}
+void SKRNLuaInterpreter::luaPrintHandler(std::string str) {
+    printOutput.push_back(str);
+    if(printOutput.size() > maxPrintOutputCount) {
+        printOutput.pop_front();
+    }
+}
+
 void SKRNLuaInterpreter::createState() {
-    
     _state = luaL_newstate();
     luaL_openlibs(_state);
+    // Register class method in Lua https://stackoverflow.com/a/21326241/4469172
+    lua_pushlightuserdata(_state, this);
+    lua_pushcclosure(_state, &SKRNLuaInterpreter::staticLuaPrintHandler, 1);
+    lua_setglobal(_state, "print");
 }
 
 void SKRNLuaInterpreter::closeStateIfNeeded() {
@@ -84,6 +121,29 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
     std::string methodName = name.utf8(runtime);
     long long methodSwitch = string_hash(methodName.c_str());
     switch(methodSwitch) {
+        case "printCount"_sh: {
+            return jsi::Value((int)printOutput.size());
+        } break;
+        case "getPrint"_sh: {
+            return EZ_JSI_HOST_FN_TEMPLATE(1, {
+                int numElems;
+                if(count < 1) {
+                    numElems = (int)printOutput.size();
+                }
+                else {
+                    numElems = (int)arguments[0].asNumber();
+                    if(numElems > printOutput.size()) {
+                        numElems = (int)printOutput.size();
+                    }
+                }
+                jsi::Array ret = jsi::Array(runtime, numElems);
+                for(int i = 0; i < numElems; i++) {
+                    ret.setValueAtIndex(runtime, i, jsi::String::createFromUtf8(runtime, printOutput[0]));
+                    printOutput.pop_front();
+                }
+                return std::move(ret);
+            });
+        } break;
         // These methods listed from https://www.lua.org/manual/5.4/manual.html#lua_pop
         case "pop"_sh: {
             return EZ_JSI_HOST_FN_TEMPLATE(1,{

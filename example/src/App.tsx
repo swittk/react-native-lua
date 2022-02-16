@@ -1,35 +1,111 @@
 import * as React from 'react';
+import { useRef } from 'react';
 
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, ScrollView } from 'react-native';
 import { luaInterpreter, multiply } from 'react-native-lua';
+
+function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
+  const frame = useRef<ReturnType<typeof requestAnimationFrame>>();
+  const prev = useRef(Date.now());
+  const animate = () => {
+    const now = Date.now();
+    // In seconds ~> you can do ms or anything in userland
+    cb(now - prev.current);
+    prev.current = now;
+    frame.current = requestAnimationFrame(animate);
+  };
+
+  React.useEffect(() => {
+    frame.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame.current!);
+  }, [cb, ...deps]);
+};
 
 export default function App() {
   const [result, setResult] = React.useState<number | undefined>();
-
+  const [interpText, setInterpText] = React.useState<string>();
+  const [outputText, setOutputText] = React.useState<string>();
+  const tInputRef = React.useRef<TextInput>(null);
   React.useEffect(() => {
     multiply(3, 7).then(setResult);
   }, []);
+  const interpreter = useRef(luaInterpreter());
   React.useEffect(() => {
-    const interp = luaInterpreter();
-    let result = interp.dostring(
-`co = coroutine.create(function ()
-for i=1,10 do
-  print("co", i)
-  coroutine.yield()
-end
-end)
-coroutine.resume(co)
-`);
-    interp.getglobal('co');
-    const a = interp.tothread(-1);
-    console.log('got a', a);
-    console.log('type val', interp.type(-1));
-    console.log('uppermost type', interp.typename(interp.type(-1)));
-  })
+    console.log('setting new interpreter')
+    interpreter.current = luaInterpreter();
+  }, [])
+
+  const refreshOutputText = React.useCallback(() => {
+    if (interpreter.current.printCount) {
+      setOutputText((outputText ? outputText + '\n' : '') + interpreter.current.getPrint().join('\n'));
+    }
+  }, [outputText]);
+  useAnimationFrameCallback(React.useCallback((_dt) => {
+    if (interpreter.current.printCount) {
+      refreshOutputText();
+    }
+  }, [refreshOutputText]), []);
+  // React.useEffect(() => {
+  //   const interp = interpreter.current;
+  //   //     let result = interp.dostring(
+  `co = coroutine.create(function ()
+    for i=1,10 do
+      print("co", i)
+      print(i * 2)
+      coroutine.yield()
+    end
+    end)
+    `;
+  //   interp.getglobal('co');
+  //   const a = interp.tothread(-1);
+  //   console.log('got a', a);
+  //   console.log('type val', interp.type(-1));
+  //   console.log('uppermost type', interp.typename(interp.type(-1)));
+  //   console.log('print count', interp.printCount);
+  //   console.log('print out', interp.getPrint());
+  // })
 
   return (
     <View style={styles.container}>
+      <View style={{ height: 20 }} />
       <Text>Result: {result}</Text>
+      <Button title='Dismiss Keyboard' onPress={() => {
+        tInputRef.current?.blur();
+      }} />
+      <Button title='Execute' onPress={() => {
+        if (!interpText) return;
+        let result = interpreter.current.dostring(interpText);
+        console.log('exec result', result);
+        if (result != 0) {
+          const errStr = interpreter.current.getLatestError();
+          console.log('exec error', errStr);
+          Alert.alert('Error', errStr);
+        }
+        setInterpText(undefined);
+      }} />
+      <KeyboardAvoidingView style={{ flex: 1 }}>
+        <TextInput
+          ref={tInputRef}
+          style={styles.textInput}
+          textAlignVertical='top'
+          multiline={true}
+          autoCapitalize='none'
+          autoCompleteType='off'
+          autoCorrect={false}
+          onChangeText={setInterpText}
+          value={interpText}
+          keyboardType='ascii-capable'
+        />
+      </KeyboardAvoidingView>
+      <ScrollView style={{ flex: 1, backgroundColor: 'black' }}>
+        <Text style={{ color: 'green' }}>
+          {outputText}
+        </Text>
+      </ScrollView>
+      <Button
+        title='Refresh Output'
+        onPress={refreshOutputText}
+      />
     </View>
   );
 }
@@ -37,7 +113,6 @@ coroutine.resume(co)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    alignItems: 'center',
     justifyContent: 'center',
   },
   box: {
@@ -45,4 +120,9 @@ const styles = StyleSheet.create({
     height: 60,
     marginVertical: 20,
   },
+  textInput: {
+    flex: 1, margin: 8,
+    borderWidth: 1, borderColor: '#888',
+    borderRadius: 8,
+  }
 });
