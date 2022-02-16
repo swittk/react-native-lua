@@ -40,6 +40,19 @@ a = b * 20
 // The rest is up to you!
 ```
 
+## Execution limits
+
+Since Lua is a scripting language, it wouldn't be nice if our code suddenly got stuck in a forever loop and blocks the whole program.
+
+This library handles this condition by leveraging Lua runtime's `lua_sethook` function (which allows us to monitor the code execution every N commands).
+
+The property `executionLimit` defines the number of milliseconds the script should run until it is terminated. Default value is 10000 (10 seconds). You can set this value by calling `setExecutionLimit(ms)`
+
+
+## Future plans
+I plan to allow each instance to have its own thread. Should be good. But will need some more planning for now. This is taking up a bit too much time 😅.
+
+
 ## Contributing
 
 See the [contributing guide](CONTRIBUTING.md) to learn how to contribute to the repository and the development workflow.
@@ -47,3 +60,23 @@ See the [contributing guide](CONTRIBUTING.md) to learn how to contribute to the 
 ## License
 
 MIT
+
+
+---
+##### Tip Jar
+
+If you appreciate my work, help buy me some soda 🥤 via the following routes.
+
+<img src="https://upload.wikimedia.org/wikipedia/commons/5/56/Stellar_Symbol.png" alt="Stellar" height="32"/>
+
+```
+Stellar Lumens (XLM) : 
+GCVKPZQUDXWVNPIIMF3FXR6KWAOHTEWPZZM2AQE4J3TXR6ZDHXQHP5BQ
+```
+
+<img src="https://upload.wikimedia.org/wikipedia/commons/1/19/Coin-ada-big.svg" alt="Cardano" height="32">
+
+```
+Cardano (ADA) : 
+addr1q9datt8urnyuc2059tquh59sva0pja7jqg4nfhnje7xcy6zpndeesglqkxhjvcgdu820flcecjzunwp6qen4yr92gm6smssug8
+```

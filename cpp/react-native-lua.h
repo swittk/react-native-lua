@@ -4,6 +4,7 @@
 #include <memory>
 #include <jsi/jsi.h>
 #include <deque>
+#include <setjmp.h>
 //#include "luaSrc/lua.h"
 
 namespace facebook {
@@ -21,7 +22,12 @@ namespace SKRNNativeLua {
 
 class SKRNLuaInterpreter : public facebook::jsi::HostObject {
 public:
+    jmp_buf place;
     lua_State *_state;
+    bool valid = true;
+    bool shouldTerminate = false;
+    long long executionLimitMilliseconds = 10000;
+    
     std::shared_ptr<facebook::react::CallInvoker> jsInvoker_;
     std::deque<std::string> printOutput;
     int maxPrintOutputCount = 100;

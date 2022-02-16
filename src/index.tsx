@@ -91,7 +91,18 @@ export interface LuaInterpreter {
   tothread(arg0: number): number,
   type(arg0: number): LUA_TYPE,
   typename(arg0: number): string,
-  yield(): number
+  yield(): number,
+
+  /** If the interpreter is still valid
+   * This is false only when the instance has crashed due to infinite loops, etc.
+   */
+  valid: boolean,
+  /** The millisecond limit for execution of this lua instance
+   * Defaults to 10000 (10 seconds)
+   */
+  executionLimit: number,
+  /** Sets the execution limit of this Lua instance */
+  setExecutionLimit(ms: number): void,
 }
 
 export function luaInterpreter(): LuaInterpreter {

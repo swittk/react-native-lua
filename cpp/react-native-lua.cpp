@@ -3,10 +3,12 @@ extern "C" {
 #include "lua_src/lua.h"
 #include "lua_src/lauxlib.h"
 #include "lua_src/lualib.h"
+#include <sys/time.h>
 }
 #include <jsi/jsi.h>
 #include "CPPNumericStringHashCompare.h"
 #include <sstream>
+#include <thread>
 
 #define EZ_JSI_HOST_FN_TEMPLATE(numArgs, capture) jsi::Function::createFromHostFunction\
 (runtime, name, numArgs,\
@@ -24,6 +26,9 @@ capture \
 namespace SKRNNativeLua {
 using namespace facebook;
 
+static long long getLuaStateStartExecutionTime(lua_State *L);
+static long long currentMillisecondsSinceEpoch();
+
 void install(facebook::jsi::Runtime &jsiRuntime) {
     using namespace jsi;
     auto newInterpreterFunction =
@@ -33,14 +38,14 @@ void install(facebook::jsi::Runtime &jsiRuntime) {
                                           0,
                                           //                                          [&, invoker](Runtime &runtime, const Value &thisValue, const Value *arguments,
                                           [&](Runtime &runtime, const Value &thisValue, const Value *arguments,
-                                                                size_t count) -> Value
+                                              size_t count) -> Value
                                           {
                                               jsi::Object object = jsi::Object::createFromHostObject(runtime, std::make_shared<SKRNLuaInterpreter>());
                                               return object;
                                           });
     jsiRuntime.global().setProperty(jsiRuntime, "SKRNNativeLuaNewInterpreter",
                                     std::move(newInterpreterFunction));
-
+    
 }
 //void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
 void cleanup(facebook::jsi::Runtime &jsiRuntime) {
@@ -83,6 +88,25 @@ void SKRNLuaInterpreter::luaPrintHandler(std::string str) {
     }
 }
 
+// Endless loop prevention hook
+// Inspired by https://stackoverflow.com/a/7083653/4469172
+static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
+{
+    int type = lua_getglobal(L, "___SKRNLuaInterpreter");
+    if(type != LUA_TLIGHTUSERDATA) {
+        printf("Unable to get global ___SKRNLuaInterpreter, error %s", lua_tostring(L, -1));
+        return;
+    }
+    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)lua_touserdata(L, -1);
+    long long startTime = getLuaStateStartExecutionTime(L);
+    long long nowTime = currentMillisecondsSinceEpoch();
+    if(nowTime - startTime > instance->executionLimitMilliseconds) {
+        printf("attempting longjump due to crash");
+        longjmp(instance->place, 1);
+    }
+}
+
+
 void SKRNLuaInterpreter::createState() {
     _state = luaL_newstate();
     luaL_openlibs(_state);
@@ -90,6 +114,11 @@ void SKRNLuaInterpreter::createState() {
     lua_pushlightuserdata(_state, this);
     lua_pushcclosure(_state, &SKRNLuaInterpreter::staticLuaPrintHandler, 1);
     lua_setglobal(_state, "print");
+    lua_pushlightuserdata(_state, this);
+    lua_setglobal(_state, "___SKRNLuaInterpreter");
+    // Add a watcher hook to prevent infinite loops
+    // Inspired by https://stackoverflow.com/a/7083653/4469172
+    lua_sethook(_state, luaState_debug_hook, LUA_MASKCOUNT, 10000);
 }
 
 void SKRNLuaInterpreter::closeStateIfNeeded() {
@@ -98,20 +127,62 @@ void SKRNLuaInterpreter::closeStateIfNeeded() {
     }
 }
 
+static long long currentMillisecondsSinceEpoch() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    long long millis = (long long)(tv.tv_sec) * 1000 + (long long)(tv.tv_usec) / 1000;
+    return millis;
+}
+
+static void setLuaStateStartExecutionTime(lua_State *L) {
+    lua_pushinteger(L, currentMillisecondsSinceEpoch());
+    lua_setglobal(L, "___skrn_start_execution_time");
+}
+static long long getLuaStateStartExecutionTime(lua_State *L) {
+    lua_getglobal(L, "___skrn_start_execution_time");
+    long long sinceStart = lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    return sinceStart;
+}
+
 /**
  * Loads and runs the given string. It is defined as the following macro:
  * (luaL_loadstring(L, str) || lua_pcall(L, 0, LUA_MULTRET, 0)).
  * @returns result code, LUA_OK if ok. (returns 0 if there are no errors or 1 in case of errors)
  */
 int SKRNLuaInterpreter::doString(std::string str) {
-    return luaL_dostring(_state, str.c_str());
+    if(!valid) return 0;
+    setLuaStateStartExecutionTime(_state);
+    int ret = 0;
+    if (setjmp(place) == 0) {
+        ret = luaL_dostring(_state, str.c_str());
+    }
+    else {
+        // Setjmp Fails. Prevent execution from happening since the lua state is now unstable.
+        printf("doString jumped due to failure of execution");
+        valid = false;
+        ret = 999;
+    }
+    return ret;
 }
 int SKRNLuaInterpreter::doFile(std::string str) {
+    if(!valid) return 0;
+    setLuaStateStartExecutionTime(_state);
     // Nice string prefix checking using stl (https://stackoverflow.com/a/40441240/4469172)
     if (str.rfind("file:///", 0) == 0) { // pos=0 limits the search to the prefix
         str = str.substr(7); // Slice out beginning "file://"
     }
-    return luaL_dofile(_state, str.c_str());
+    int ret = 0;
+    if (setjmp(place) == 0) {
+        ret = luaL_dofile(_state, str.c_str());
+    }
+    else {
+        // Setjmp Fails. Prevent execution from happening since the lua state is now unstable.
+        printf("doFile jumped due to failure of execution");
+        valid = false;
+        ret = 999;
+    }
+    return ret;
 }
 std::string SKRNLuaInterpreter::getLatestError() {
     return lua_tostring(_state, -1);
@@ -144,7 +215,30 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return std::move(ret);
             });
         } break;
-        // These methods listed from https://www.lua.org/manual/5.4/manual.html#lua_pop
+//        case "dostringasync"_sh: {
+//            return jsi::Function::createFromHostFunction
+//            (runtime,name,2, [](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
+//                if(count < 2) {
+//                    return jsi::Value::undefined();
+//                }
+//                std::string todostring = arguments[0].getString(runtime).utf8(runtime);
+//                std::shared_ptr<jsi::Object> userCallbackRef =
+//                std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
+//                std::thread runThread = std::thread([&]() {
+//
+//
+//                    userCallbackRef->asFunction(runtime).call(runtime, jsi::Value::undefined());
+//                    runThread.join();
+//                });
+//                return jsi::Value::undefined();
+//            });
+//            return EZ_JSI_HOST_FN_TEMPLATE(1,{
+//                if(count < 1) return jsi::Value::undefined();
+//                std::string str = arguments[0].asString(runtime).utf8(runtime);
+//                return jsi::Value(doString(str));
+//            });
+//        } break;
+            // These methods listed from https://www.lua.org/manual/5.4/manual.html#lua_pop
         case "pop"_sh: {
             return EZ_JSI_HOST_FN_TEMPLATE(1,{
                 if(count < 1) return jsi::Value::undefined();
@@ -244,7 +338,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return jsi::Value::undefined();
             });
         } break;
-        // lua_rawsetp
+            // lua_rawsetp
             
             // skip to lua_remove
         case "remove"_sh: {
@@ -360,18 +454,31 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
         } break;
             
         case "dostring"_sh: {
+            if(!valid) {
+                throw jsi::JSError(runtime, "Runtime is no longer valid");
+            }
             return EZ_JSI_HOST_FN_TEMPLATE(1,{
                 if(count < 1) return jsi::Value::undefined();
                 std::string str = arguments[0].asString(runtime).utf8(runtime);
-                return jsi::Value(doString(str));
+                int retVal = doString(str);
+                if(retVal == 999) {
+                    throw jsi::JSError(runtime, "Execution over limit");
+                }
+                return jsi::Value(retVal);
             });
         } break;
         case "dofile"_sh: {
+            if(!valid) {
+                throw jsi::JSError(runtime, "Runtime is no longer valid");
+            }
             return EZ_JSI_HOST_FN_TEMPLATE(1,{
                 if(count < 1) return jsi::Value::undefined();
                 std::string str = arguments[0].asString(runtime).utf8(runtime);
-                int ret = doFile(str);
-                return jsi::Value(ret);
+                int retVal = doFile(str);
+                if(retVal == 999) {
+                    throw jsi::JSError(runtime, "Execution over limit");
+                }
+                return jsi::Value(retVal);
             });
         } break;
         case "getglobal"_sh: {
@@ -432,9 +539,9 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return jsi::Value::undefined();
             });
         } break;
-//        case "topointer"_sh: {
-//
-//        } break;
+            //        case "topointer"_sh: {
+            //
+            //        } break;
         case "tothread"_sh: {
             return EZ_JSI_HOST_FN_TEMPLATE(1, {
                 if(count < 1) return jsi::Value::undefined();
@@ -454,11 +561,28 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return jsi::String::createFromUtf8(runtime, lua_typename(_state, arguments[0].asNumber()));
             });
         } break;
-        
+            
             // skip to lua_yield
         case "yield"_sh: {
             return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
                 return jsi::Value(lua_yield(_state, arguments[0].asNumber()));
+            });
+        } break;
+            
+        case "valid"_sh: {
+            return jsi::Value(valid);
+        } break;
+            
+        case "executionLimit"_sh: {
+            return jsi::Value((double)executionLimitMilliseconds);
+        } break;
+        case "setExecutionLimit"_sh: {
+            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
+                executionLimitMilliseconds = arguments[0].asNumber();
+                if(executionLimitMilliseconds < 0) {
+                    executionLimitMilliseconds = 10000;
+                }
+                return jsi::Value::undefined();
             });
         } break;
             
@@ -516,7 +640,8 @@ static std::vector<std::string> nativeLuaInterpreterKeys = {
     "tothread",
     "type",
     "typename",
-    "yield"
+    "yield",
+    "valid"
 };
 std::vector<jsi::PropNameID> SKRNLuaInterpreter::getPropertyNames(jsi::Runtime& rt) {
     std::vector<jsi::PropNameID> ret;
