@@ -193,6 +193,12 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return jsi::Value::undefined();
             });
         } break;
+        case "insert"_sh: {
+            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
+                lua_insert(_state, arguments[0].asNumber());
+                return jsi::Value::undefined();
+            });
+        } break;
         case "replace"_sh: {
             return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
                 lua_replace(_state, arguments[0].asNumber());
@@ -267,6 +273,11 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
                 lua_settop(_state, arguments[0].asNumber());
                 return jsi::Value::undefined();
+            });
+        } break;
+        case "gettop"_sh: {
+            return EZ_JSI_HOST_FN_TEMPLATE(0, {
+                return jsi::Value(lua_gettop(_state));
             });
         } break;
             //lua_setwarnf
@@ -415,6 +426,7 @@ static std::vector<std::string> nativeLuaInterpreterKeys = {
     "rawset",
     "rawseti",
     "remove",
+    "insert",
     "replace",
     "resetthread",
     "resume",
@@ -426,6 +438,7 @@ static std::vector<std::string> nativeLuaInterpreterKeys = {
     "setmetatable",
     "settable",
     "settop",
+    "gettop",
     "status",
     "stringtonumber",
     "gettable",

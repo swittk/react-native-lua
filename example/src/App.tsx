@@ -11,13 +11,19 @@ export default function App() {
   }, []);
   React.useEffect(() => {
     const interp = luaInterpreter();
-    interp.dostring(`a = 2
-b = a ^ 2
-a = b * 20
-    `);
-    interp.getglobal('a');
-    const a = interp.tointeger(-1);
+    let result = interp.dostring(
+`co = coroutine.create(function ()
+for i=1,10 do
+  print("co", i)
+  coroutine.yield()
+end
+end)
+coroutine.resume(co)
+`);
+    interp.getglobal('co');
+    const a = interp.tothread(-1);
     console.log('got a', a);
+    console.log('type val', interp.type(-1));
     console.log('uppermost type', interp.typename(interp.type(-1)));
   })
 

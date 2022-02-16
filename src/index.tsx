@@ -21,6 +21,18 @@ export function multiply(a: number, b: number): Promise<number> {
   return Lua.multiply(a, b);
 }
 
+/** This corresponds to the types LUA_TNIL, LUA_TBOOLEAN, etc.. defined in `lua.h` */
+export enum LUA_TYPE {
+  LUA_TNIL = 0,
+  LUA_TBOOLEAN = 1,
+  LUA_TLIGHTUSERDATA = 2,
+  LUA_TNUMBER = 3,
+  LUA_TSTRING = 4,
+  LUA_TTABLE = 5,
+  LUA_TFUNCTION = 6,
+  LUA_TUSERDATA = 7,
+  LUA_TTHREAD = 8,
+}
 
 export interface LuaInterpreter {
   dostring(string: string): void,
@@ -42,6 +54,7 @@ export interface LuaInterpreter {
   rawset(arg0: number): void,
   rawseti(arg0: number, arg1: number): void,
   remove(arg0: number): void,
+  insert(arg0: number): void,
   replace(arg0: number): void,
   resetthread(): void,
   resume(arg0: number, arg1: number): unknown,
@@ -53,6 +66,7 @@ export interface LuaInterpreter {
   setmetatable(arg0: number): number,
   settable(arg0: number): void,
   settop(arg0: number): void,
+  gettop(): number,
   status(): number,
   stringtonumber(arg0: string): number,
   gettable(arg0: number): number,
@@ -68,7 +82,7 @@ export interface LuaInterpreter {
   tostring(arg0: number): number,
   topointer(arg0: number): void,
   tothread(arg0: number): number,
-  type(arg0: number): number,
+  type(arg0: number): LUA_TYPE,
   typename(arg0: number): string,
   yield(): number
 }
