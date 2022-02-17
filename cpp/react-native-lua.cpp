@@ -12,6 +12,10 @@ extern "C" {
 #include <thread>
 #include <ReactCommon/CallInvoker.h>
 #include "skrnluaezcppstringoperations.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#define printf(...) __android_log_print(ANDROID_LOG_DEBUG, "TAG", __VA_ARGS__);
+#endif
 
 #define EZ_JSI_HOST_FN_TEMPLATE(numArgs, capture) jsi::Function::createFromHostFunction\
 (runtime, name, numArgs,\
@@ -45,8 +49,13 @@ static int skrn_lua_sleep (lua_State *L) {
     return 0;
 }
 
+//std::shared_ptr<facebook::react::CallInvoker> shared_callinvoker;
 void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker) {
     using namespace jsi;
+
+//    std::shared_ptr<facebook::react::CallInvoker> shared_callinvoker;
+    // This is stupid using a global variable, but just adding this to try prevent android from crashing.
+//    shared_callinvoker = invoker;
     auto newInterpreterFunction =
     jsi::Function::createFromHostFunction(
                                           jsiRuntime,
@@ -56,16 +65,22 @@ void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react
                                           [&, invoker](jsi::Runtime &runtime, const jsi::Value &thisValue, const jsi::Value *arguments,
                                               size_t count) -> jsi::Value
                                           {
+                                              if(invoker == nullptr) {
+                                                  printf("nullptr sad life");
+                                                  return jsi::Value::undefined();
+                                              }
+
                                               jsi::Object object = jsi::Object::createFromHostObject(runtime, std::make_shared<SKRNLuaInterpreter>(invoker));
                                               return object;
                                           });
     jsiRuntime.global().setProperty(jsiRuntime, "SKRNNativeLuaNewInterpreter",
                                     std::move(newInterpreterFunction));
-    
+
 }
 //void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
 void cleanup(facebook::jsi::Runtime &jsiRuntime) {
-    
+//        shared_callinvoker = nullptr;
+    // shared_callinvoker = null
 }
 int multiply(float a, float b) {
     return a * b;
@@ -81,7 +96,7 @@ int SKRNLuaInterpreter::staticLuaPrintHandler(lua_State *L) {
         if(i > 1) {
             outStr << "\t";
         }
-        
+
         if (lua_isstring(L, i)) {
             /* Pop the next arg using lua_tostring(L, i) and do your print */
             const char *str = lua_tostring(L, i);
@@ -117,11 +132,9 @@ static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
     }
     SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)lua_touserdata(L, -1);
     lua_pop(L, 1);
-    long long diff = currentMillisecondsSinceEpoch() - getLuaStateStartExecutionTime(L);
-    printf("current %d, get %d, diff %d", currentMillisecondsSinceEpoch(), getLuaStateStartExecutionTime(L), diff);
     if(instance->shouldTerminate
        ||
-       diff > instance->executionLimitMilliseconds)
+       currentMillisecondsSinceEpoch() - getLuaStateStartExecutionTime(L) > instance->executionLimitMilliseconds)
     {
         printf("attempting longjump due to crash");
         longjmp(instance->place, 1);
@@ -146,6 +159,7 @@ void SKRNLuaInterpreter::createState() {
 }
 
 void SKRNLuaInterpreter::closeStateIfNeeded() {
+    printf("closing state(deallocating)");
     if(_state != NULL) {
         shouldTerminate = true;
         lua_close(_state);
@@ -157,7 +171,7 @@ static long long currentMillisecondsSinceEpoch() {
 //    gettimeofday(&tv, NULL);
 //    long long millis = (long long)(tv.tv_sec) * 1000 + (long long)(tv.tv_usec) / 1000;
 //    return millis;
-    return duration_cast<std::chrono::milliseconds >(
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
                                          std::chrono::system_clock::now().time_since_epoch()
                                      ).count();
 }
@@ -256,6 +270,9 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
         } break;
         case "dostringasync"_sh: {
             std::shared_ptr<react::CallInvoker> invoker = callInvoker;
+            if(callInvoker == nullptr) {
+                throw jsi::JSError(runtime, "callinvoker is null");
+            }
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
@@ -271,11 +288,16 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 std::string todostring = arguments[0].getString(runtime).utf8(runtime);
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
-                std::thread runThread = std::thread([&, userCallbackRef, todostring]() {
+                std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
+                std::thread runThread = std::thread([&, userCallbackRef, myInvoker, todostring]() {
                     int ret = doString(todostring);
                     setExecuting(false);
-                    callInvoker.get()->invokeAsync([&, userCallbackRef, ret]{
+                    if(myInvoker == nullptr) return;
+                    myInvoker->invokeAsync([&, userCallbackRef, ret]{
                         printf("ret is %d", ret);
+                        if(userCallbackRef == nullptr) {
+                            return;
+                        }
                         userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
                     });
                 });
@@ -290,6 +312,9 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
         } break;
         case "dofileasync"_sh: {
             std::shared_ptr<react::CallInvoker> invoker = callInvoker;
+            if(callInvoker == nullptr) {
+                throw jsi::JSError(runtime, "callinvoker is null");
+            }
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
@@ -305,11 +330,16 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 std::string todostring = arguments[0].getString(runtime).utf8(runtime);
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
+                std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
                 std::thread runThread = std::thread([&, userCallbackRef, todostring]() {
                     int ret = doFile(todostring);
                     setExecuting(false);
-                    callInvoker.get()->invokeAsync([&, userCallbackRef, ret]{
+                    if(myInvoker == nullptr) return;
+                    myInvoker->invokeAsync([&, userCallbackRef, ret]{
                         printf("ret is %d", ret);
+                        if(userCallbackRef == nullptr) {
+                            return;
+                        }
                         userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
                     });
                 });
@@ -419,7 +449,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             });
         } break;
             // lua_rawsetp
-            
+
             // skip to lua_remove
         case "remove"_sh: {
             return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
@@ -532,7 +562,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return jsi::Value(lua_gettable(_state, arguments[0].asNumber()));
             });
         } break;
-            
+
         case "dostring"_sh: {
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
@@ -649,18 +679,18 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return jsi::String::createFromUtf8(runtime, lua_typename(_state, arguments[0].asNumber()));
             });
         } break;
-            
+
             // skip to lua_yield
         case "yield"_sh: {
             return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
                 return jsi::Value(lua_yield(_state, arguments[0].asNumber()));
             });
         } break;
-            
+
         case "valid"_sh: {
             return jsi::Value(valid);
         } break;
-            
+
         case "executionLimit"_sh: {
             return jsi::Value((double)executionLimitMilliseconds);
         } break;
@@ -673,7 +703,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return jsi::Value::undefined();
             });
         } break;
-            
+
             //        case "size"_sh: {
             //            return ObjectFromSKRNSize(runtime, size());
             //        } break;
@@ -750,8 +780,13 @@ void SKRNLuaMultitheadUserStateOpen(lua_State *L) {
     *extraSpace = (void *)helper;
 }
 void SKRNLuaMultitheadUserStateClose(lua_State *L) {
+    printf("userstateclose");
     SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
-    delete helper;
+    if(helper != NULL) {
+        delete helper;
+        printf("deleted helper");
+        helper = NULL;
+    }
 }
 void SKRNLuaMultitheadLuaLock(lua_State *L) {
     SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);

@@ -75,4 +75,4 @@ target_include_directories(${PACKAGE_NAME} PRIVATE
   // Additional header directories here
   ${libfbjni_include_DIRS}
 )
-target_link_libraries(${PACKAGE_NAME} ${FBJNI_LIBRARY})
+target_link_libraries(${PACKAGE_NAME} ${FBJNI_LIBRARY} android log)

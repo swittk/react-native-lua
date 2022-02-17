@@ -23,7 +23,6 @@ struct lua_State;
 namespace SKRNNativeLua {
   int multiply(float a, float b);
 
-int count = 0;
 class SKRNLuaMTHelper {
 public:
     std::mutex mutex;

@@ -1,10 +1,10 @@
 import * as React from 'react';
 import { useRef } from 'react';
 
-import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, ScrollView } from 'react-native';
+import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, ScrollView, Platform } from 'react-native';
 import { luaInterpreter, LUA_ERROR_CODE, multiply } from 'react-native-lua';
 
-const defaultString = `co = coroutine.create(function ()
+const defaultiOSString = `co = coroutine.create(function ()
 for i=1,10 
 do
   print("co", i)
@@ -18,8 +18,13 @@ while(i < 10)
 do
   coroutine.resume(co)
   sleep(1000)
+  i = i + 1
 end
 `
+const defaultAndroidString = `i = 0
+while(i < 10) 
+do print(i) i + 1
+end`
 
 function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
   const frame = useRef<ReturnType<typeof requestAnimationFrame>>();
@@ -40,7 +45,7 @@ function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
 
 export default function App() {
   const [result, setResult] = React.useState<number | undefined>();
-  const [interpText, setInterpText] = React.useState<string | undefined>(defaultString);
+  const [interpText, setInterpText] = React.useState<string | undefined>(Platform.OS == 'ios' ? defaultiOSString : defaultAndroidString);
   const [outputText, setOutputText] = React.useState<string>();
   const tInputRef = React.useRef<TextInput>(null);
   React.useEffect(() => {
@@ -92,18 +97,29 @@ export default function App() {
         //   console.log('exec error', errStr);
         //   Alert.alert('Error', errStr);
         // }
-        interpreter.current.dostringasync(interpText, (result) => {
+        if (Platform.OS == 'ios') {
+          interpreter.current.dostringasync(interpText, (result) => {
+            console.log('exec result', result);
+            if (result == LUA_ERROR_CODE.LUA_CRASHED_INTERPRETER) {
+              Alert.alert('Error', "Interpreter has crashed");
+              return;
+            }
+            if (result != 0) {
+              const errStr = interpreter.current.getLatestError();
+              console.log('exec error', errStr);
+              Alert.alert('Error', errStr);
+            }
+          });
+        }
+        else {
+          let result = interpreter.current.dostring(interpText);
           console.log('exec result', result);
-          if (result == LUA_ERROR_CODE.LUA_CRASHED_INTERPRETER) {
-            Alert.alert('Error', "Interpreter has crashed");
-            return;
-          }
           if (result != 0) {
             const errStr = interpreter.current.getLatestError();
             console.log('exec error', errStr);
             Alert.alert('Error', errStr);
           }
-        });
+        }
         setInterpText(undefined);
       }} />
       <KeyboardAvoidingView style={{ flex: 1 }}>
