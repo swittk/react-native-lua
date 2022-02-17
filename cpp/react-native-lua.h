@@ -121,17 +121,19 @@ public:
 #pragma mark - LifeCycle Methods
     SKRNLuaInterpreter(std::shared_ptr<facebook::react::CallInvoker> _callInvoker) : callInvoker(_callInvoker) {
         executing = false;
-        asyncProcessingThread = std::thread([&]() {
-            asyncThreadQueuer.worker_main();
-        });
+        // TODO: Uncomment this when finally implementing do___async functions with asyncProcessingThread
+//        asyncProcessingThread = std::thread([&]() {
+//            asyncThreadQueuer.worker_main();
+//        });
         printf("\nallocated addresss %lld", (long long)this);
         createState();
     }
     ~SKRNLuaInterpreter() {
         shouldTerminate = true;
-        asyncThreadQueuer.signalTerminateJobs();
-        printf("attempting to join for instance %lld", (long long)this);
-        asyncProcessingThread.join();
+        // TODO: Uncomment this when finally implementing do___async functions with asyncProcessingThread
+//        asyncThreadQueuer.signalTerminateJobs();
+//        printf("attempting to join for instance %lld", (long long)this);
+//        asyncProcessingThread.join();
         printf("\ndeallocate addresss %lld", (long long)this);
         closeStateIfNeeded();
     }
