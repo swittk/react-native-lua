@@ -301,6 +301,8 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                     executing = false;
                     if(myInvoker == nullptr) return;
                     printf("has invoker, about to invoke it");
+                    
+                    // Currently Android crashes right here. It also crashes whenever callInvoker->invokeAsync() is called, even during the module initialization (::install() method). Any help with debugging this would be extremely welcome.
                     myInvoker->invokeAsync([&, userCallbackRef, ret]{
                         if(userCallbackRef == nullptr) {
                             return;
