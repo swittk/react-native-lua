@@ -104,8 +104,8 @@ export default function App() {
         //   Alert.alert('Error', errStr);
         // }
         const interpreter = getInterpreter();
-        // if (Platform.OS == 'ios') {
-        if (true) {
+        if (Platform.OS == 'ios') {
+        // if (true) {
           interpreter.dostringasync(interpText, (result) => {
             console.log('exec result', result);
             if (result == LUA_ERROR_CODE.LUA_CRASHED_INTERPRETER) {
@@ -120,13 +120,13 @@ export default function App() {
           });
         }
         else {
-          // let result = interpreter.dostring(interpText);
-          // console.log('exec result', result);
-          // if (result != 0) {
-          //   const errStr = interpreter.getLatestError();
-          //   console.log('exec error', errStr);
-          //   Alert.alert('Error', errStr);
-          // }
+          let result = interpreter.dostring(interpText);
+          console.log('exec result', result);
+          if (result != 0) {
+            const errStr = interpreter.getLatestError();
+            console.log('exec error', errStr);
+            Alert.alert('Error', errStr);
+          }
         }
         setInterpText(undefined);
       }} />

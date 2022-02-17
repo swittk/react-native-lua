@@ -37,8 +37,20 @@ interp.dostring(`a = 2
 b = a ^ 2
 a = b * 20
     `);
+// Or asynchronously! Each Lua Interpreter spawns its own thread when executing async code, so this doesn't block any other processes.
+interp.dostringasync(`i = 0
+while(i < 8)
+do
+  print(i)
+  sleep(100)
+  i = i + 1
+end`)
+
 // The rest is up to you!
 ```
+
+#### The interpreter in action
+![the-interpreter-in-action](/docs/images/example-coroutine-async-demonstration.gif)
 
 ## Execution limits
 
@@ -48,9 +60,9 @@ This library handles this condition by leveraging Lua runtime's `lua_sethook` fu
 
 The property `executionLimit` defines the number of milliseconds the script should run until it is terminated. Default value is 10000 (10 seconds). You can set this value by calling `setExecutionLimit(ms)`
 
-
 ## Future plans
-I plan to allow each instance to have its own thread. Should be good. But will need some more planning for now. This is taking up a bit too much time 😅.
+- Make async `dostringasync` and `dofileasync` work on Android
+    - iOS `dostringasync` is working perfectly well, however, in Android it is only possible to use `dostring` since CallInvoker crashes immediately when InvokeAsync() is called. Any help in getting this working would be very much appreciated.
 
 
 ## Contributing

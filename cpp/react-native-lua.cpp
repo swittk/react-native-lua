@@ -307,7 +307,6 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                         }
                         printf("calling userCallbackRef since it is not null");
                         userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
-                        
                     });
                 });
                 runThread.detach();
