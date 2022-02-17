@@ -2,6 +2,20 @@ cmake_minimum_required(VERSION 3.4.1)
 
 set (CMAKE_VERBOSE_MAKEFILE ON)
 set (CMAKE_CXX_STANDARD 14)
+
+
+set (PACKAGE_NAME "SKRNNativeLua")
+
+# find fbjni package
+set(build_DIR ${CMAKE_SOURCE_DIR}/build)
+
+file(GLOB libfbjni_link_DIRS "${build_DIR}/fbjni*.aar/jni/${ANDROID_ABI}")
+file(GLOB libfbjni_include_DIRS "${build_DIR}/fbjni-*-headers.jar/")
+
+find_library(FBJNI_LIBRARY fbjni PATHS ${libfbjni_link_DIRS}
+NO_CMAKE_FIND_ROOT_PATH)
+
+
 #set (NODE_MODULES_DIR "../node_modules") # NODE_MODULES_DIR is set from the build.gradle file
 set (RN_SO_DIR ${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/jni/first-party/react/jni)
 set (FBJNI_HEADERS_DIR ${RN_SO_DIR}/../../fbjni/headers)
@@ -24,13 +38,15 @@ endif()
 file(GLOB lua_source_dir_dot_c "../cpp/lua_src/*.c")
 file(GLOB lua_source_dir_dot_h "../cpp/lua_src/*.h")
 
-add_library(SKRNNativeLua
+
+add_library(${PACKAGE_NAME}
             SHARED
             ../cpp/react-native-lua.cpp
             cpp-adapter.cpp
             ${lua_source_dir_dot_c}
             ${INCLUDE_JSI_CPP}
             ${INCLUDE_JSIDYNAMIC_CPP}
+            "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni/ReactCommon/CallInvokerHolder.cpp"
 )
 
 # Specifies a path to native header files.
@@ -53,3 +69,10 @@ include_directories(
             "${NODE_MODULES_DIR}/react-native/React/Base"
             "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
 )
+
+# target_link_libraries(${PACKAGE_NAME} fbjni::fbjni)
+target_include_directories(${PACKAGE_NAME} PRIVATE
+  // Additional header directories here
+  ${libfbjni_include_DIRS}
+)
+target_link_libraries(${PACKAGE_NAME} ${FBJNI_LIBRARY})

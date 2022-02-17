@@ -4,6 +4,7 @@
 #import <React/RCTBridge+Private.h>
 #import <jsi/jsi.h>
 #import <ReactCommon/CallInvoker.h>
+#import <ReactCommon/RCTTurboModuleManager.h>
 
 @implementation SKNativeLua
 @synthesize bridge = _bridge;
@@ -59,7 +60,7 @@ RCT_EXPORT_METHOD(multiply:(nonnull NSNumber*)a withB:(nonnull NSNumber*)b
         return;
     }
     facebook::jsi::Runtime *runtime = (facebook::jsi::Runtime *)cxxBridge.runtime;
-    SKRNNativeLua::install(*runtime);
+    SKRNNativeLua::install(*runtime, cxxBridge.jsCallInvoker);
 }
 
 - (void)invalidate {

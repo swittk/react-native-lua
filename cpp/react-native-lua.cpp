@@ -29,7 +29,16 @@ using namespace facebook;
 static long long getLuaStateStartExecutionTime(lua_State *L);
 static long long currentMillisecondsSinceEpoch();
 
-void install(facebook::jsi::Runtime &jsiRuntime) {
+static void skrn_lua_lock(lua_State *L) {
+    int type = lua_getglobal(L, "___SKRNLuaInterpreter");
+    if(type != LUA_TLIGHTUSERDATA) {
+        printf("Unable to get global ___SKRNLuaInterpreter, error %s", lua_tostring(L, -1));
+        return;
+    }
+    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)lua_touserdata(L, -1);
+}
+
+void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker) {
     using namespace jsi;
     auto newInterpreterFunction =
     jsi::Function::createFromHostFunction(
@@ -98,9 +107,11 @@ static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
         return;
     }
     SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)lua_touserdata(L, -1);
-    long long startTime = getLuaStateStartExecutionTime(L);
-    long long nowTime = currentMillisecondsSinceEpoch();
-    if(nowTime - startTime > instance->executionLimitMilliseconds) {
+    lua_pop(L, 1);
+    if(instance->shouldTerminate
+       ||
+       currentMillisecondsSinceEpoch() - getLuaStateStartExecutionTime(L) > instance->executionLimitMilliseconds)
+    {
         printf("attempting longjump due to crash");
         longjmp(instance->place, 1);
     }
@@ -123,6 +134,7 @@ void SKRNLuaInterpreter::createState() {
 
 void SKRNLuaInterpreter::closeStateIfNeeded() {
     if(_state != NULL) {
+        shouldTerminate = true;
         lua_close(_state);
     }
 }

@@ -29,7 +29,7 @@ buildscript {
         }
 
         dependencies {
-            classpath 'com.android.tools.build:gradle:3.5.3'
+            classpath 'com.android.tools.build:gradle:4.2.0'
         }
     }
 }
@@ -44,7 +44,11 @@ def getExtOrDefaultValue(name, defaultValue) {
 }
 
 android {
-    compileSdkVersion safeExtGet('Lua_compileSdkVersion', 29)
+  configurations {
+    extractHeaders
+    extractJNI
+  }
+  compileSdkVersion safeExtGet('Lua_compileSdkVersion', 29)
     ndkVersion getExtOrDefaultValue('ndkVersion', '21.4.7075529')
     defaultConfig {
         minSdkVersion safeExtGet('Lua_minSdkVersion', 16)
@@ -58,7 +62,10 @@ android {
                 abiFilters 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
               arguments "-DNODE_MODULES_DIR=${nodeModules.toString()}",
                 // This is how the REACT_NATIVE_VERSION magic variable appears in our CMAKELISTS file
-                "-DREACT_NATIVE_VERSION=${REACT_NATIVE_VERSION}"
+                "-DREACT_NATIVE_VERSION=${REACT_NATIVE_VERSION}",
+                // Needed to add this otherwise the fbjni header won't be found
+                // https://github.com/facebookincubator/fbjni/issues/50#issuecomment-788869153
+                 '-DANDROID_STL=c++_shared'
             }
         }
 
@@ -82,6 +89,23 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+  dependencies {
+    implementation 'com.facebook.fbjni:fbjni:+'
+    // If headers are required.
+    extractHeaders 'com.facebook.fbjni:fbjni:+:headers'
+    // If the `.so` files are required for linking.
+    extractJNI 'com.facebook.fbjni:fbjni:+'
+  }
+  // Doing this following https://github.com/facebookincubator/fbjni/issues/50#issuecomment-788869153
+  // Final change that made this finally able to run on device (though still crashes due to sth else)
+  packagingOptions {
+    exclude("**/libfbjni.so")
+    exclude("**/libc++_shared.so")
+//    exclude 'lib/arm64-v8a/libfbjni.so'
+  }
+  configurations {
+    all*.exclude module: 'fbjni-java-only'
+  }
 }
 
 repositories {
@@ -90,6 +114,9 @@ repositories {
         // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
         url("$rootDir/../node_modules/react-native/android")
     }
+    maven {
+      url("$rootDir/../node_modules/react-native")
+    }
     google()
     mavenCentral()
     jcenter()
@@ -97,5 +124,40 @@ repositories {
 
 dependencies {
     //noinspection GradleDynamicVersion
-    implementation "com.facebook.react:react-native:+"  // From node_modules
+  implementation("com.facebook.react:react-native:+") {
+        exclude group: 'com.facebook.fbjni', module: 'fbjni-java-only'
+}//    implementation 'com.facebook.fbjni:fbjni:0.2.2'
+}
+
+task extractAARHeaders {
+  doLast {
+    configurations.extractHeaders.files.each {
+      def file = it.absoluteFile
+      copy {
+        from zipTree(file)
+        into "$buildDir/$file.name"
+        include "**/*.h"
+      }
+    }
+  }
+}
+
+task extractJNIFiles {
+  doLast {
+    configurations.extractJNI.files.each {
+      def file = it.absoluteFile
+      copy {
+        from zipTree(file)
+        into "$buildDir/$file.name"
+        include "jni/**/*"
+      }
+    }
+  }
+}
+
+tasks.whenTaskAdded { task ->
+  if (task.name.contains('externalNativeBuild')) {
+    task.dependsOn(extractAARHeaders)
+    task.dependsOn(extractJNIFiles)
+  }
 }

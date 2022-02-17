@@ -4,7 +4,10 @@
 #include <memory>
 #include <jsi/jsi.h>
 #include <deque>
+extern "C" {
 #include <setjmp.h>
+}
+#include <mutex>
 //#include "luaSrc/lua.h"
 
 namespace facebook {
@@ -24,11 +27,12 @@ class SKRNLuaInterpreter : public facebook::jsi::HostObject {
 public:
     jmp_buf place;
     lua_State *_state;
+    
     bool valid = true;
     bool shouldTerminate = false;
     long long executionLimitMilliseconds = 10000;
     
-    std::shared_ptr<facebook::react::CallInvoker> jsInvoker_;
+    std::shared_ptr<facebook::react::CallInvoker> callInvoker;
     std::deque<std::string> printOutput;
     int maxPrintOutputCount = 100;
     
@@ -60,7 +64,7 @@ public:
     std::vector<facebook::jsi::PropNameID> getPropertyNames(facebook::jsi::Runtime& rt);
 };
 
-void install(facebook::jsi::Runtime &jsiRuntime);
+void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
 //void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
 void cleanup(facebook::jsi::Runtime &jsiRuntime);
 }

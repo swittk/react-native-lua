@@ -8,6 +8,7 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.module.annotations.ReactModule;
+import com.facebook.react.turbomodule.core.CallInvokerHolderImpl;
 
 @ReactModule(name = LuaModule.NAME)
 public class LuaModule extends ReactContextBaseJavaModule {
@@ -30,7 +31,7 @@ public class LuaModule extends ReactContextBaseJavaModule {
 
     public static native int nativeMultiply(int a, int b);
 
-  private static native void initialize(long jsiRuntimePointer);
+  private static native void initialize(long jsiRuntimePointer, CallInvokerHolderImpl jsCallInvokerHolder);
 
   private static native void cleanup(long jsiRuntimePointer);
 
@@ -53,7 +54,8 @@ public class LuaModule extends ReactContextBaseJavaModule {
   public void initialize() {
     ReactApplicationContext context = this.reactContext;
     JavaScriptContextHolder jsContext = context.getJavaScriptContextHolder();
-    LuaModule.initialize(jsContext.get());
+    CallInvokerHolderImpl holder = (CallInvokerHolderImpl) context.getCatalystInstance().getJSCallInvokerHolder();
+    LuaModule.initialize(jsContext.get(), holder);
   }
 
   // This method is called automatically (defined in BaseJavaModule.java)

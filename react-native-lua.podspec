@@ -16,4 +16,6 @@ Pod::Spec.new do |s|
   s.source_files = "ios/**/*.{h,m,mm,c}", "cpp/**/*.{h,cpp,c}"
 
   s.dependency "React-Core"
+  # Need to include this to include turbomodules...
+  s.dependency 'ReactCommon/turbomodule/core'
 end
