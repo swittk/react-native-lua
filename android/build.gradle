@@ -90,7 +90,7 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
   dependencies {
-    implementation 'com.facebook.fbjni:fbjni:+'
+//    implementation 'com.facebook.fbjni:fbjni:+'
     // If headers are required.
     extractHeaders 'com.facebook.fbjni:fbjni:+:headers'
     // If the `.so` files are required for linking.
