@@ -59,9 +59,9 @@ include_directories(
             "${NODE_MODULES_DIR}/react-native/ReactCommon"
             "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
             "${NODE_MODULES_DIR}/react-native/ReactCommon/callinvoker"
-            "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni/ReactCommon"
-            # ../node_modules/react-native/ReactAndroid/src/main/jni/react/jni/JavaScriptExecutorHolder.h
-            # ../node_modules/react-native/ReactAndroid/src/main/jni/react/jni
+            "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni"
+            "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/jni/react/jni/JavaScriptExecutorHolder.h"
+            "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/jni/react/jni"
             "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/jni/react"
             "${NODE_MODULES_DIR}/react-native/ReactCommon/turbomodule/core"
             "${NODE_MODULES_DIR}/react-native/ReactCommon/turbomodule"

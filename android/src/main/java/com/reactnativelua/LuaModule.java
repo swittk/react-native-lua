@@ -63,7 +63,9 @@ public class LuaModule extends ReactContextBaseJavaModule {
   // This method is equivalent to Objective-C's 'invalidate'
   @Override
   public void onCatalystInstanceDestroy() {
-    LuaModule.cleanup(this.reactContext.getJavaScriptContextHolder().get());
+    ReactApplicationContext context = this.reactContext;
+    JavaScriptContextHolder jsContext = context.getJavaScriptContextHolder();
+    LuaModule.cleanup(jsContext.get());
     // FlexibleHttpModule.cleanup(this.getReactApplicationContext());
   }
 }

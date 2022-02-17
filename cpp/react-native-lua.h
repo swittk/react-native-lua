@@ -9,6 +9,9 @@ extern "C" {
 }
 #include <mutex>
 #include <map>
+#include <queue>
+#include <thread>
+
 //#include "luaSrc/lua.h"
 
 namespace facebook {
@@ -47,6 +50,55 @@ public:
 //    }
 };
 
+
+// Heavy, heavy thanks to this answer for this solution. https://stackoverflow.com/a/48816876/4469172
+class AsyncThreadQueuer {
+public:
+    std::mutex m_mutex;
+    std::queue<std::function<void()>>m_queue;
+    std::condition_variable m_condition;
+    std::atomic<bool> m_exitCondition;
+    int m_numJobs = 0;
+    
+    // called by main thread
+    void AddJob(std::function<void()> f)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_queue.push(std::move(f));
+            ++m_numJobs;
+        }
+        m_condition.notify_one();  // It's good style to call notify_one when not holding the lock.
+    }
+
+    void worker_main()
+    {
+        while(!m_exitCondition)
+            doJob();
+    }
+    void signalTerminateJobs() {
+        m_exitCondition = true;
+        m_condition.notify_one();
+    }
+private:
+    void doJob()
+    {
+        std::function<void()> f;
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            while (m_numJobs == 0 && !m_exitCondition)
+                m_condition.wait(lock);
+
+            if (m_exitCondition)
+                return;
+            f = std::move(m_queue.front());
+            m_queue.pop();
+            --m_numJobs;
+        }
+        f();
+    }
+};
+
 class SKRNLuaInterpreter : public facebook::jsi::HostObject {
 public:
     jmp_buf place;
@@ -61,17 +113,25 @@ public:
     std::deque<std::string> printOutput;
     int maxPrintOutputCount = 1000;
     
-    std::mutex executingBoolMutex;
-    bool __executing;
-    bool executing() { executingBoolMutex.lock(); auto ___retval = __executing;  executingBoolMutex.unlock(); return ___retval; }
-    void setExecuting(bool val) { executingBoolMutex.lock(); __executing = val;  executingBoolMutex.unlock(); }
+    std::atomic<bool> executing;
     
+    std::thread asyncProcessingThread;
+    AsyncThreadQueuer asyncThreadQueuer;
+        
 #pragma mark - LifeCycle Methods
     SKRNLuaInterpreter(std::shared_ptr<facebook::react::CallInvoker> _callInvoker) : callInvoker(_callInvoker) {
+        executing = false;
+        asyncProcessingThread = std::thread([&]() {
+            asyncThreadQueuer.worker_main();
+        });
         printf("\nallocated addresss %lld", (long long)this);
         createState();
     }
     ~SKRNLuaInterpreter() {
+        shouldTerminate = true;
+        asyncThreadQueuer.signalTerminateJobs();
+        printf("attempting to join for instance %lld", (long long)this);
+        asyncProcessingThread.join();
         printf("\ndeallocate addresss %lld", (long long)this);
         closeStateIfNeeded();
     }

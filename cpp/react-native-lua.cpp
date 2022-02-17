@@ -139,6 +139,7 @@ static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
 
 
 void SKRNLuaInterpreter::createState() {
+    
     _state = luaL_newstate();
     luaL_openlibs(_state);
     SKRNLuaMTHelper *helper = mtHelperForLuaState(_state);
@@ -159,7 +160,6 @@ void SKRNLuaInterpreter::closeStateIfNeeded() {
     callInvoker = nullptr;
     printf("\nclosing state(deallocating)");
     if(_state != NULL) {
-        shouldTerminate = true;
         printf("\ndoing lua_close");
         lua_sethook(_state, NULL, 0, 100);
         lua_close(_state);
@@ -279,7 +279,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
-            if(executing()) {
+            if(executing) {
                 throw jsi::JSError(runtime, "Runtime is executing");
             }
             return jsi::Function::createFromHostFunction
@@ -290,43 +290,29 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
 //                callInvoker->invokeAsync([&]{
 //                    arguments[1].getObject(runtime).asFunction(runtime).call(runtime, 555);
 //                });
-                setExecuting(true);
+                executing = true;
                 std::string todostring = arguments[0].getString(runtime).utf8(runtime);
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
                 std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
-//                long long myPtrAddr = (long long)this;
-//                std::string tempPropName = StringEZSprintf("__callback%lld", myPtrAddr);
-//                runtime.global().setProperty(runtime, jsi::PropNameID::forUtf8(runtime, tempPropName), arguments[1].getObject(runtime));
-                
-//                std::thread runThread = std::thread([&, tempPropName, myInvoker, todostring]() {
-                    std::thread runThread = std::thread([&, userCallbackRef, myInvoker, todostring]() {
+                std::thread runThread = std::thread([&, this, userCallbackRef, myInvoker, todostring]() {
                     int ret = doString(todostring);
                     printf("ret is %d", ret);
-                    setExecuting(false);
+                    executing = false;
                     if(myInvoker == nullptr) return;
                     printf("has invoker, about to invoke it");
-                    jsi::Runtime *runtimePtr = &runtime;
-//                    myInvoker->invokeAsync([&, tempPropName, ret, runtimePtr]{
-                        myInvoker->invokeAsync([&, userCallbackRef, ret, runtimePtr]{
-                        jsi::Runtime& rt = *runtimePtr;
-//                        jsi::Value userCallbackVal = rt.global().getProperty(runtime, jsi::PropNameID::forUtf8(runtime, tempPropName));
+                    myInvoker->invokeAsync([&, userCallbackRef, ret]{
                         if(userCallbackRef == nullptr) {
                             return;
                         }
                         printf("calling userCallbackRef since it is not null");
-                        userCallbackRef->asFunction(runtime).call(rt, jsi::Value(ret));
+                        userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
                         
                     });
                 });
                 runThread.detach();
                 return jsi::Value::undefined();
             });
-//            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-//                if(count < 1) return jsi::Value::undefined();
-//                std::string str = arguments[0].asString(runtime).utf8(runtime);
-//                return jsi::Value(doString(str));
-//            });
         } break;
         case "dofileasync"_sh: {
             std::shared_ptr<react::CallInvoker> invoker = callInvoker;
@@ -336,7 +322,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
-            if(executing()) {
+            if(executing) {
                 throw jsi::JSError(runtime, "Runtime is executing");
             }
             return jsi::Function::createFromHostFunction
@@ -344,14 +330,14 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 if(count < 2) {
                     return jsi::Value::undefined();
                 }
-                setExecuting(true);
+                executing = true;
                 std::string todostring = arguments[0].getString(runtime).utf8(runtime);
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
                 std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
                 std::thread runThread = std::thread([&, userCallbackRef, todostring]() {
                     int ret = doFile(todostring);
-                    setExecuting(false);
+                    executing = false;
                     if(myInvoker == nullptr) return;
                     myInvoker->invokeAsync([&, userCallbackRef, ret]{
                         printf("ret is %d", ret);
@@ -585,14 +571,14 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
-            if(executing()) {
+            if(executing) {
                 throw jsi::JSError(runtime, "Runtime is executing");
             }
             return EZ_JSI_HOST_FN_TEMPLATE(1,{
                 if(count < 1) return jsi::Value::undefined();
                 std::string str = arguments[0].asString(runtime).utf8(runtime);
                 int retVal = doString(str);
-                setExecuting(false);
+                executing = false;
                 if(retVal == 999) {
                     throw jsi::JSError(runtime, "Execution over limit");
                 }
@@ -603,14 +589,14 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
-            if(executing()) {
+            if(executing) {
                 throw jsi::JSError(runtime, "Runtime is executing");
             }
             return EZ_JSI_HOST_FN_TEMPLATE(1,{
                 if(count < 1) return jsi::Value::undefined();
                 std::string str = arguments[0].asString(runtime).utf8(runtime);
                 int retVal = doFile(str);
-                setExecuting(false);
+                executing = false;
                 if(retVal == 999) {
                     throw jsi::JSError(runtime, "Execution over limit");
                 }
