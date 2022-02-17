@@ -4,11 +4,14 @@ extern "C" {
 #include "lua_src/lauxlib.h"
 #include "lua_src/lualib.h"
 #include <sys/time.h>
+#include "skrnlua_multithread_define.h"
 }
 #include <jsi/jsi.h>
 #include "CPPNumericStringHashCompare.h"
 #include <sstream>
 #include <thread>
+#include <ReactCommon/CallInvoker.h>
+#include "skrnluaezcppstringoperations.h"
 
 #define EZ_JSI_HOST_FN_TEMPLATE(numArgs, capture) jsi::Function::createFromHostFunction\
 (runtime, name, numArgs,\
@@ -22,6 +25,11 @@ size_t count) -> jsi::Value \
 if(count < 1) return jsi::Value::undefined(); \
 capture \
 })
+SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L);
+void SKRNLuaMultitheadUserStateOpen(lua_State *L);
+void SKRNLuaMultitheadUserStateClose(lua_State *L);
+void SKRNLuaMultitheadLuaLock(lua_State *L);
+void SKRNLuaMultitheadLuaUnlock(lua_State *L);
 
 namespace SKRNNativeLua {
 using namespace facebook;
@@ -29,13 +37,12 @@ using namespace facebook;
 static long long getLuaStateStartExecutionTime(lua_State *L);
 static long long currentMillisecondsSinceEpoch();
 
-static void skrn_lua_lock(lua_State *L) {
-    int type = lua_getglobal(L, "___SKRNLuaInterpreter");
-    if(type != LUA_TLIGHTUSERDATA) {
-        printf("Unable to get global ___SKRNLuaInterpreter, error %s", lua_tostring(L, -1));
-        return;
-    }
-    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)lua_touserdata(L, -1);
+static int skrn_lua_sleep (lua_State *L) {
+    double ms = luaL_checknumber(L, 1);
+    //check and fetch the arguments
+    std::this_thread::sleep_for(std::chrono::milliseconds((int)ms));
+    //return number of results
+    return 0;
 }
 
 void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker) {
@@ -46,10 +53,10 @@ void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react
                                           PropNameID::forAscii(jsiRuntime, "SKRNNativeLuaNewInterpreter"),
                                           0,
                                           //                                          [&, invoker](Runtime &runtime, const Value &thisValue, const Value *arguments,
-                                          [&](Runtime &runtime, const Value &thisValue, const Value *arguments,
-                                              size_t count) -> Value
+                                          [&, invoker](jsi::Runtime &runtime, const jsi::Value &thisValue, const jsi::Value *arguments,
+                                              size_t count) -> jsi::Value
                                           {
-                                              jsi::Object object = jsi::Object::createFromHostObject(runtime, std::make_shared<SKRNLuaInterpreter>());
+                                              jsi::Object object = jsi::Object::createFromHostObject(runtime, std::make_shared<SKRNLuaInterpreter>(invoker));
                                               return object;
                                           });
     jsiRuntime.global().setProperty(jsiRuntime, "SKRNNativeLuaNewInterpreter",
@@ -91,10 +98,12 @@ int SKRNLuaInterpreter::staticLuaPrintHandler(lua_State *L) {
     return 0;
 }
 void SKRNLuaInterpreter::luaPrintHandler(std::string str) {
+    printOutputMutex.lock();
     printOutput.push_back(str);
     if(printOutput.size() > maxPrintOutputCount) {
         printOutput.pop_front();
     }
+    printOutputMutex.unlock();
 }
 
 // Endless loop prevention hook
@@ -108,9 +117,11 @@ static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
     }
     SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)lua_touserdata(L, -1);
     lua_pop(L, 1);
+    long long diff = currentMillisecondsSinceEpoch() - getLuaStateStartExecutionTime(L);
+    printf("current %d, get %d, diff %d", currentMillisecondsSinceEpoch(), getLuaStateStartExecutionTime(L), diff);
     if(instance->shouldTerminate
        ||
-       currentMillisecondsSinceEpoch() - getLuaStateStartExecutionTime(L) > instance->executionLimitMilliseconds)
+       diff > instance->executionLimitMilliseconds)
     {
         printf("attempting longjump due to crash");
         longjmp(instance->place, 1);
@@ -127,9 +138,11 @@ void SKRNLuaInterpreter::createState() {
     lua_setglobal(_state, "print");
     lua_pushlightuserdata(_state, this);
     lua_setglobal(_state, "___SKRNLuaInterpreter");
+    lua_pushcfunction(_state, skrn_lua_sleep);
+    lua_setglobal(_state, "sleep");
     // Add a watcher hook to prevent infinite loops
     // Inspired by https://stackoverflow.com/a/7083653/4469172
-    lua_sethook(_state, luaState_debug_hook, LUA_MASKCOUNT, 10000);
+    lua_sethook(_state, luaState_debug_hook, LUA_MASKCOUNT, 100);
 }
 
 void SKRNLuaInterpreter::closeStateIfNeeded() {
@@ -140,10 +153,13 @@ void SKRNLuaInterpreter::closeStateIfNeeded() {
 }
 
 static long long currentMillisecondsSinceEpoch() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    long long millis = (long long)(tv.tv_sec) * 1000 + (long long)(tv.tv_usec) / 1000;
-    return millis;
+//    struct timeval tv;
+//    gettimeofday(&tv, NULL);
+//    long long millis = (long long)(tv.tv_sec) * 1000 + (long long)(tv.tv_usec) / 1000;
+//    return millis;
+    return duration_cast<std::chrono::milliseconds >(
+                                         std::chrono::system_clock::now().time_since_epoch()
+                                     ).count();
 }
 
 static void setLuaStateStartExecutionTime(lua_State *L) {
@@ -205,51 +221,103 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
     long long methodSwitch = string_hash(methodName.c_str());
     switch(methodSwitch) {
         case "printCount"_sh: {
-            return jsi::Value((int)printOutput.size());
+            printOutputMutex.lock();
+            int size = (int)printOutput.size();
+            printOutputMutex.unlock();
+            return jsi::Value(size);
         } break;
         case "getPrint"_sh: {
             return EZ_JSI_HOST_FN_TEMPLATE(1, {
+                printOutputMutex.lock();
+                int size = (int)printOutput.size();
+                printOutputMutex.unlock();
                 int numElems;
                 if(count < 1) {
-                    numElems = (int)printOutput.size();
+                    numElems = size;
                 }
                 else {
                     numElems = (int)arguments[0].asNumber();
-                    if(numElems > printOutput.size()) {
-                        numElems = (int)printOutput.size();
+                    if(numElems > size) {
+                        numElems = size;
                     }
                 }
-                jsi::Array ret = jsi::Array(runtime, numElems);
+//                jsi::Array ret = jsi::Array(runtime, numElems);
+                printOutputMutex.lock();
+                std::vector<std::string> printElems;
                 for(int i = 0; i < numElems; i++) {
-                    ret.setValueAtIndex(runtime, i, jsi::String::createFromUtf8(runtime, printOutput[0]));
+                    printElems.push_back(std::move(printOutput[0]));
                     printOutput.pop_front();
                 }
+                printOutputMutex.unlock();
+                std::string retStr = StringEZJoin(printElems, "\n");
+                jsi::String ret = jsi::String::createFromUtf8(runtime, retStr);
                 return std::move(ret);
             });
         } break;
-//        case "dostringasync"_sh: {
-//            return jsi::Function::createFromHostFunction
-//            (runtime,name,2, [](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
-//                if(count < 2) {
-//                    return jsi::Value::undefined();
-//                }
-//                std::string todostring = arguments[0].getString(runtime).utf8(runtime);
-//                std::shared_ptr<jsi::Object> userCallbackRef =
-//                std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
-//                std::thread runThread = std::thread([&]() {
-//
-//
-//                    userCallbackRef->asFunction(runtime).call(runtime, jsi::Value::undefined());
-//                    runThread.join();
-//                });
-//                return jsi::Value::undefined();
-//            });
+        case "dostringasync"_sh: {
+            std::shared_ptr<react::CallInvoker> invoker = callInvoker;
+            if(!valid) {
+                throw jsi::JSError(runtime, "Runtime is no longer valid");
+            }
+            if(executing()) {
+                throw jsi::JSError(runtime, "Runtime is executing");
+            }
+            setExecuting(true);
+            return jsi::Function::createFromHostFunction
+            (runtime,name, 1, [&, invoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
+                if(count < 2) {
+                    return jsi::Value::undefined();
+                }
+                std::string todostring = arguments[0].getString(runtime).utf8(runtime);
+                std::shared_ptr<jsi::Object> userCallbackRef =
+                std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
+                std::thread runThread = std::thread([&, userCallbackRef, todostring]() {
+                    int ret = doString(todostring);
+                    setExecuting(false);
+                    callInvoker.get()->invokeAsync([&, userCallbackRef, ret]{
+                        printf("ret is %d", ret);
+                        userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
+                    });
+                });
+                runThread.detach();
+                return jsi::Value::undefined();
+            });
 //            return EZ_JSI_HOST_FN_TEMPLATE(1,{
 //                if(count < 1) return jsi::Value::undefined();
 //                std::string str = arguments[0].asString(runtime).utf8(runtime);
 //                return jsi::Value(doString(str));
 //            });
-//        } break;
+        } break;
+        case "dofileasync"_sh: {
+            std::shared_ptr<react::CallInvoker> invoker = callInvoker;
+            if(!valid) {
+                throw jsi::JSError(runtime, "Runtime is no longer valid");
+            }
+            if(executing()) {
+                throw jsi::JSError(runtime, "Runtime is executing");
+            }
+            setExecuting(true);
+            return jsi::Function::createFromHostFunction
+            (runtime,name, 1, [&, invoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
+                if(count < 2) {
+                    return jsi::Value::undefined();
+                }
+                std::string todostring = arguments[0].getString(runtime).utf8(runtime);
+                std::shared_ptr<jsi::Object> userCallbackRef =
+                std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
+                std::thread runThread = std::thread([&, userCallbackRef, todostring]() {
+                    int ret = doFile(todostring);
+                    setExecuting(false);
+                    callInvoker.get()->invokeAsync([&, userCallbackRef, ret]{
+                        printf("ret is %d", ret);
+                        userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
+                    });
+                });
+                runThread.detach();
+                return jsi::Value::undefined();
+            });
+
+        } break;
             // These methods listed from https://www.lua.org/manual/5.4/manual.html#lua_pop
         case "pop"_sh: {
             return EZ_JSI_HOST_FN_TEMPLATE(1,{
@@ -469,10 +537,14 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
+            if(executing()) {
+                throw jsi::JSError(runtime, "Runtime is executing");
+            }
             return EZ_JSI_HOST_FN_TEMPLATE(1,{
                 if(count < 1) return jsi::Value::undefined();
                 std::string str = arguments[0].asString(runtime).utf8(runtime);
                 int retVal = doString(str);
+                setExecuting(false);
                 if(retVal == 999) {
                     throw jsi::JSError(runtime, "Execution over limit");
                 }
@@ -483,10 +555,14 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
+            if(executing()) {
+                throw jsi::JSError(runtime, "Runtime is executing");
+            }
             return EZ_JSI_HOST_FN_TEMPLATE(1,{
                 if(count < 1) return jsi::Value::undefined();
                 std::string str = arguments[0].asString(runtime).utf8(runtime);
                 int retVal = doFile(str);
+                setExecuting(false);
                 if(retVal == 999) {
                     throw jsi::JSError(runtime, "Execution over limit");
                 }
@@ -662,4 +738,31 @@ std::vector<jsi::PropNameID> SKRNLuaInterpreter::getPropertyNames(jsi::Runtime& 
     }
     return ret;
 }
+}
+#define LUAMTHELPERKEY "__SKRNMTHelper"
+void SKRNLuaMultitheadUserStateOpen(lua_State *L) {
+    // Lua EXTRADATA http://lua-users.org/lists/lua-l/2013-09/msg00005.html
+    // But it's no longer the same in Lua 5.4 apparently;
+    // We how have helpful macros like lua_getextraspace !
+    void **extraSpace = (void **)lua_getextraspace(L);
+    SKRNNativeLua::SKRNLuaMTHelper *helper = new SKRNNativeLua::SKRNLuaMTHelper();
+//    ((char *)(L) - LUA_EXTRASPACE);
+    *extraSpace = (void *)helper;
+}
+void SKRNLuaMultitheadUserStateClose(lua_State *L) {
+    SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
+    delete helper;
+}
+void SKRNLuaMultitheadLuaLock(lua_State *L) {
+    SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
+    helper->mutex.lock();
+}
+void SKRNLuaMultitheadLuaUnlock(lua_State *L) {
+    SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
+    helper->mutex.unlock();
+}
+SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L) {
+    void **extraspacePointer = (void **)lua_getextraspace(L);
+    SKRNNativeLua::SKRNLuaMTHelper *helper = (SKRNNativeLua::SKRNLuaMTHelper *)(*extraspacePointer);
+    return helper;
 }

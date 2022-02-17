@@ -2,7 +2,24 @@ import * as React from 'react';
 import { useRef } from 'react';
 
 import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, ScrollView } from 'react-native';
-import { luaInterpreter, multiply } from 'react-native-lua';
+import { luaInterpreter, LUA_ERROR_CODE, multiply } from 'react-native-lua';
+
+const defaultString = `co = coroutine.create(function ()
+for i=1,10 
+do
+  print("co", i)
+  print(i * 2)
+  coroutine.yield()
+end
+end)
+
+i = 0
+while(i < 10)
+do
+  coroutine.resume(co)
+  sleep(1000)
+end
+`
 
 function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
   const frame = useRef<ReturnType<typeof requestAnimationFrame>>();
@@ -23,7 +40,7 @@ function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
 
 export default function App() {
   const [result, setResult] = React.useState<number | undefined>();
-  const [interpText, setInterpText] = React.useState<string>();
+  const [interpText, setInterpText] = React.useState<string | undefined>(defaultString);
   const [outputText, setOutputText] = React.useState<string>();
   const tInputRef = React.useRef<TextInput>(null);
   React.useEffect(() => {
@@ -37,7 +54,7 @@ export default function App() {
 
   const refreshOutputText = React.useCallback(() => {
     if (interpreter.current.printCount) {
-      setOutputText((outputText ? outputText + '\n' : '') + interpreter.current.getPrint().join('\n'));
+      setOutputText((outputText ? outputText + '\n' : '') + interpreter.current.getPrint());
     }
   }, [outputText]);
   useAnimationFrameCallback(React.useCallback((_dt) => {
@@ -48,14 +65,6 @@ export default function App() {
   // React.useEffect(() => {
   //   const interp = interpreter.current;
   //   //     let result = interp.dostring(
-  `co = coroutine.create(function ()
-    for i=1,10 do
-      print("co", i)
-      print(i * 2)
-      coroutine.yield()
-    end
-    end)
-    `;
   //   interp.getglobal('co');
   //   const a = interp.tothread(-1);
   //   console.log('got a', a);
@@ -68,19 +77,33 @@ export default function App() {
   return (
     <View style={styles.container}>
       <View style={{ height: 20 }} />
-      <Text>Result: {result}</Text>
+      <Button title='Reload New Interpreter' onPress={() => {
+        interpreter.current = luaInterpreter();
+      }} />
       <Button title='Dismiss Keyboard' onPress={() => {
         tInputRef.current?.blur();
       }} />
       <Button title='Execute' onPress={() => {
         if (!interpText) return;
-        let result = interpreter.current.dostring(interpText);
-        console.log('exec result', result);
-        if (result != 0) {
-          const errStr = interpreter.current.getLatestError();
-          console.log('exec error', errStr);
-          Alert.alert('Error', errStr);
-        }
+        // let result = interpreter.current.dostring(interpText);
+        // console.log('exec result', result);
+        // if (result != 0) {
+        //   const errStr = interpreter.current.getLatestError();
+        //   console.log('exec error', errStr);
+        //   Alert.alert('Error', errStr);
+        // }
+        interpreter.current.dostringasync(interpText, (result) => {
+          console.log('exec result', result);
+          if (result == LUA_ERROR_CODE.LUA_CRASHED_INTERPRETER) {
+            Alert.alert('Error', "Interpreter has crashed");
+            return;
+          }
+          if (result != 0) {
+            const errStr = interpreter.current.getLatestError();
+            console.log('exec error', errStr);
+            Alert.alert('Error', errStr);
+          }
+        });
         setInterpText(undefined);
       }} />
       <KeyboardAvoidingView style={{ flex: 1 }}>

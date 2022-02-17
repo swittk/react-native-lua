@@ -10,7 +10,7 @@
 
 #include <limits.h>
 #include <stddef.h>
-
+#include "skrnlua_multithread_define.h"
 
 /*
 ** ===================================================================

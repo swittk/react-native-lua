@@ -23,6 +23,28 @@ struct lua_State;
 namespace SKRNNativeLua {
   int multiply(float a, float b);
 
+int count = 0;
+class SKRNLuaMTHelper {
+public:
+    std::mutex mutex;
+//    int hid;
+//    SKRNLuaMTHelper() {
+//        count++;
+//        hid = count;
+//        printf("alloc mthelper %d", hid);
+//    }
+//    SKRNLuaMTHelper (const SKRNLuaMTHelper &c) : mutex(), hid(count++)
+//    {
+//        printf("copy mthelper %d", hid);
+//    }
+//    ~SKRNLuaMTHelper() {
+//        printf("dealloc mthelper %d", hid);
+//    }
+//    void bark() {
+//        printf("woof %d", hid);
+//    }
+};
+
 class SKRNLuaInterpreter : public facebook::jsi::HostObject {
 public:
     jmp_buf place;
@@ -33,11 +55,17 @@ public:
     long long executionLimitMilliseconds = 10000;
     
     std::shared_ptr<facebook::react::CallInvoker> callInvoker;
+    std::mutex printOutputMutex;
     std::deque<std::string> printOutput;
-    int maxPrintOutputCount = 100;
+    int maxPrintOutputCount = 1000;
+    
+    std::mutex executingBoolMutex;
+    bool __executing;
+    bool executing() { executingBoolMutex.lock(); auto ___retval = __executing;  executingBoolMutex.unlock(); return ___retval; }
+    void setExecuting(bool val) { executingBoolMutex.lock(); __executing = val;  executingBoolMutex.unlock(); }
     
 #pragma mark - LifeCycle Methods
-    SKRNLuaInterpreter() {
+    SKRNLuaInterpreter(std::shared_ptr<facebook::react::CallInvoker> _callInvoker) : callInvoker(_callInvoker) {
         createState();
     }
     ~SKRNLuaInterpreter() {

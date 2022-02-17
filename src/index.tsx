@@ -34,8 +34,15 @@ export enum LUA_TYPE {
   LUA_TTHREAD = 8,
 }
 
+export enum LUA_ERROR_CODE {
+  LUA_CRASHED_INTERPRETER = 999
+}
+
 export interface LuaInterpreter {
-  dostring(string: string): number,
+  dostringasync(str: string, callback: (code: number) => void): void,
+  dofileasync(str: string, callback: (code: number) => void): void,
+
+  dostring(str: string): number,
   dofile(filepath: string): number,
 
   /** The number of printed strings */
@@ -43,7 +50,7 @@ export interface LuaInterpreter {
   /** Pop printed strings out by the count value specified
    * If count is not specified, pops out all strings.
    */
-  getPrint(count?: number): string[];
+  getPrint(count?: number): string;
 
   pop(arg0: number): void,
   pushboolean(arg0: number): void,
