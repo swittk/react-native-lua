@@ -8,6 +8,7 @@ extern "C" {
 #include <setjmp.h>
 }
 #include <mutex>
+#include <map>
 //#include "luaSrc/lua.h"
 
 namespace facebook {
@@ -26,6 +27,8 @@ namespace SKRNNativeLua {
 class SKRNLuaMTHelper {
 public:
     std::mutex mutex;
+    
+    std::map<int, void *>conveniencePointers;
 //    int hid;
 //    SKRNLuaMTHelper() {
 //        count++;
@@ -65,9 +68,11 @@ public:
     
 #pragma mark - LifeCycle Methods
     SKRNLuaInterpreter(std::shared_ptr<facebook::react::CallInvoker> _callInvoker) : callInvoker(_callInvoker) {
+        printf("\nallocated addresss %lld", (long long)this);
         createState();
     }
     ~SKRNLuaInterpreter() {
+        printf("\ndeallocate addresss %lld", (long long)this);
         closeStateIfNeeded();
     }
     void createState();

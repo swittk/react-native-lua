@@ -9,6 +9,8 @@
 #define skrnluaezcppstringoperations_h
 #include <string>
 #include <sstream>
+#include <cstdio>
+#include <cassert>
 
 // Great functions provided by https://stackoverflow.com/a/5289170/4469172
 
@@ -45,5 +47,21 @@ void StringEZSplit(char delimiter, Output &output, Input const& input) {
         }
     }
 }
+
+
+// Thanks to https://stackoverflow.com/a/32821650/4469172
+template< typename... Args >
+std::string StringEZSprintf( const char* format, Args... args ) {
+  int length = std::snprintf( nullptr, 0, format, args... );
+  assert( length >= 0 );
+
+  char* buf = new char[length + 1];
+  std::snprintf( buf, length + 1, format, args... );
+
+  std::string str( buf );
+  delete[] buf;
+  return str;
+}
+
 
 #endif /* skrnluaezcppstringoperations_h */

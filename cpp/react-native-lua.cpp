@@ -29,6 +29,7 @@ size_t count) -> jsi::Value \
 if(count < 1) return jsi::Value::undefined(); \
 capture \
 })
+void clearMTHelperForLuaState(lua_State *L);
 SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L);
 void SKRNLuaMultitheadUserStateOpen(lua_State *L);
 void SKRNLuaMultitheadUserStateClose(lua_State *L);
@@ -125,13 +126,8 @@ void SKRNLuaInterpreter::luaPrintHandler(std::string str) {
 // Inspired by https://stackoverflow.com/a/7083653/4469172
 static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
 {
-    int type = lua_getglobal(L, "___SKRNLuaInterpreter");
-    if(type != LUA_TLIGHTUSERDATA) {
-        printf("Unable to get global ___SKRNLuaInterpreter, error %s", lua_tostring(L, -1));
-        return;
-    }
-    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)lua_touserdata(L, -1);
-    lua_pop(L, 1);
+    SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
+    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)helper->conveniencePointers[0];
     if(instance->shouldTerminate
        ||
        currentMillisecondsSinceEpoch() - getLuaStateStartExecutionTime(L) > instance->executionLimitMilliseconds)
@@ -145,12 +141,13 @@ static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
 void SKRNLuaInterpreter::createState() {
     _state = luaL_newstate();
     luaL_openlibs(_state);
+    SKRNLuaMTHelper *helper = mtHelperForLuaState(_state);
+    helper->conveniencePointers[0] = (void *)this;
+//    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)helper->conveniencePointers[0];
     // Register class method in Lua https://stackoverflow.com/a/21326241/4469172
     lua_pushlightuserdata(_state, this);
     lua_pushcclosure(_state, &SKRNLuaInterpreter::staticLuaPrintHandler, 1);
     lua_setglobal(_state, "print");
-    lua_pushlightuserdata(_state, this);
-    lua_setglobal(_state, "___SKRNLuaInterpreter");
     lua_pushcfunction(_state, skrn_lua_sleep);
     lua_setglobal(_state, "sleep");
     // Add a watcher hook to prevent infinite loops
@@ -159,11 +156,17 @@ void SKRNLuaInterpreter::createState() {
 }
 
 void SKRNLuaInterpreter::closeStateIfNeeded() {
-    printf("closing state(deallocating)");
+    callInvoker = nullptr;
+    printf("\nclosing state(deallocating)");
     if(_state != NULL) {
         shouldTerminate = true;
+        printf("\ndoing lua_close");
+        lua_sethook(_state, NULL, 0, 100);
         lua_close(_state);
+        _state = NULL;
+        printf("\ndone lua_close");
     }
+    printf("\ndone all deallocating");
 }
 
 static long long currentMillisecondsSinceEpoch() {
@@ -279,26 +282,41 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             if(executing()) {
                 throw jsi::JSError(runtime, "Runtime is executing");
             }
-            setExecuting(true);
             return jsi::Function::createFromHostFunction
             (runtime,name, 1, [&, invoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
                 if(count < 2) {
                     return jsi::Value::undefined();
                 }
+//                callInvoker->invokeAsync([&]{
+//                    arguments[1].getObject(runtime).asFunction(runtime).call(runtime, 555);
+//                });
+                setExecuting(true);
                 std::string todostring = arguments[0].getString(runtime).utf8(runtime);
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
                 std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
-                std::thread runThread = std::thread([&, userCallbackRef, myInvoker, todostring]() {
+//                long long myPtrAddr = (long long)this;
+//                std::string tempPropName = StringEZSprintf("__callback%lld", myPtrAddr);
+//                runtime.global().setProperty(runtime, jsi::PropNameID::forUtf8(runtime, tempPropName), arguments[1].getObject(runtime));
+                
+//                std::thread runThread = std::thread([&, tempPropName, myInvoker, todostring]() {
+                    std::thread runThread = std::thread([&, userCallbackRef, myInvoker, todostring]() {
                     int ret = doString(todostring);
+                    printf("ret is %d", ret);
                     setExecuting(false);
                     if(myInvoker == nullptr) return;
-                    myInvoker->invokeAsync([&, userCallbackRef, ret]{
-                        printf("ret is %d", ret);
+                    printf("has invoker, about to invoke it");
+                    jsi::Runtime *runtimePtr = &runtime;
+//                    myInvoker->invokeAsync([&, tempPropName, ret, runtimePtr]{
+                        myInvoker->invokeAsync([&, userCallbackRef, ret, runtimePtr]{
+                        jsi::Runtime& rt = *runtimePtr;
+//                        jsi::Value userCallbackVal = rt.global().getProperty(runtime, jsi::PropNameID::forUtf8(runtime, tempPropName));
                         if(userCallbackRef == nullptr) {
                             return;
                         }
-                        userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
+                        printf("calling userCallbackRef since it is not null");
+                        userCallbackRef->asFunction(runtime).call(rt, jsi::Value(ret));
+                        
                     });
                 });
                 runThread.detach();
@@ -321,12 +339,12 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             if(executing()) {
                 throw jsi::JSError(runtime, "Runtime is executing");
             }
-            setExecuting(true);
             return jsi::Function::createFromHostFunction
             (runtime,name, 1, [&, invoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
                 if(count < 2) {
                     return jsi::Value::undefined();
                 }
+                setExecuting(true);
                 std::string todostring = arguments[0].getString(runtime).utf8(runtime);
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
@@ -781,12 +799,7 @@ void SKRNLuaMultitheadUserStateOpen(lua_State *L) {
 }
 void SKRNLuaMultitheadUserStateClose(lua_State *L) {
     printf("userstateclose");
-    SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
-    if(helper != NULL) {
-        delete helper;
-        printf("deleted helper");
-        helper = NULL;
-    }
+    clearMTHelperForLuaState(L);
 }
 void SKRNLuaMultitheadLuaLock(lua_State *L) {
     SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
@@ -800,4 +813,14 @@ SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L) {
     void **extraspacePointer = (void **)lua_getextraspace(L);
     SKRNNativeLua::SKRNLuaMTHelper *helper = (SKRNNativeLua::SKRNLuaMTHelper *)(*extraspacePointer);
     return helper;
+}
+void clearMTHelperForLuaState(lua_State *L) {
+    void **extraspacePointer = (void **)lua_getextraspace(L);
+    if(*extraspacePointer != NULL) {
+        printf("nonnulextraspace");
+        SKRNNativeLua::SKRNLuaMTHelper *helper = (SKRNNativeLua::SKRNLuaMTHelper *)(*extraspacePointer);
+        delete helper;
+        printf("deleted helper");
+        *extraspacePointer = NULL;
+    }
 }

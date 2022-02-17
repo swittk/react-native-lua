@@ -2,9 +2,9 @@ import * as React from 'react';
 import { useRef } from 'react';
 
 import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, ScrollView, Platform } from 'react-native';
-import { luaInterpreter, LUA_ERROR_CODE, multiply } from 'react-native-lua';
+import { LuaInterpreter, luaInterpreter, LUA_ERROR_CODE, multiply } from 'react-native-lua';
 
-const defaultiOSString = `co = coroutine.create(function ()
+const defaultInterpString = `co = coroutine.create(function ()
 for i=1,10 
 do
   print("co", i)
@@ -23,7 +23,7 @@ end
 `
 const defaultAndroidString = `i = 0
 while(i < 10) 
-do print(i) i + 1
+do print(i) i = i + 1
 end`
 
 function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
@@ -45,25 +45,31 @@ function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
 
 export default function App() {
   const [result, setResult] = React.useState<number | undefined>();
-  const [interpText, setInterpText] = React.useState<string | undefined>(Platform.OS == 'ios' ? defaultiOSString : defaultAndroidString);
+  const [interpText, setInterpText] = React.useState<string | undefined>(
+    // Platform.OS == 'ios' ? defaultInterpString : defaultAndroidString
+    defaultInterpString
+  );
   const [outputText, setOutputText] = React.useState<string>();
   const tInputRef = React.useRef<TextInput>(null);
   React.useEffect(() => {
     multiply(3, 7).then(setResult);
   }, []);
-  const interpreter = useRef(luaInterpreter());
-  React.useEffect(() => {
-    console.log('setting new interpreter')
-    interpreter.current = luaInterpreter();
-  }, [])
-
+  const __interpreter = useRef<LuaInterpreter>();
+  const getInterpreter = React.useCallback(() => {
+    if (!__interpreter.current) {
+      __interpreter.current = luaInterpreter();
+    }
+    return __interpreter.current;
+  }, []);
   const refreshOutputText = React.useCallback(() => {
-    if (interpreter.current.printCount) {
-      setOutputText((outputText ? outputText + '\n' : '') + interpreter.current.getPrint());
+    const interpreter = getInterpreter();
+    if (interpreter.printCount) {
+      setOutputText((outputText ? outputText + '\n' : '') + interpreter.getPrint());
     }
   }, [outputText]);
   useAnimationFrameCallback(React.useCallback((_dt) => {
-    if (interpreter.current.printCount) {
+    const interpreter = getInterpreter();
+    if (interpreter.printCount) {
       refreshOutputText();
     }
   }, [refreshOutputText]), []);
@@ -83,7 +89,7 @@ export default function App() {
     <View style={styles.container}>
       <View style={{ height: 20 }} />
       <Button title='Reload New Interpreter' onPress={() => {
-        interpreter.current = luaInterpreter();
+        __interpreter.current = luaInterpreter();
       }} />
       <Button title='Dismiss Keyboard' onPress={() => {
         tInputRef.current?.blur();
@@ -97,28 +103,30 @@ export default function App() {
         //   console.log('exec error', errStr);
         //   Alert.alert('Error', errStr);
         // }
-        if (Platform.OS == 'ios') {
-          interpreter.current.dostringasync(interpText, (result) => {
+        const interpreter = getInterpreter();
+        // if (Platform.OS == 'ios') {
+        if (true) {
+          interpreter.dostringasync(interpText, (result) => {
             console.log('exec result', result);
             if (result == LUA_ERROR_CODE.LUA_CRASHED_INTERPRETER) {
               Alert.alert('Error', "Interpreter has crashed");
               return;
             }
             if (result != 0) {
-              const errStr = interpreter.current.getLatestError();
+              const errStr = interpreter.getLatestError();
               console.log('exec error', errStr);
               Alert.alert('Error', errStr);
             }
           });
         }
         else {
-          let result = interpreter.current.dostring(interpText);
-          console.log('exec result', result);
-          if (result != 0) {
-            const errStr = interpreter.current.getLatestError();
-            console.log('exec error', errStr);
-            Alert.alert('Error', errStr);
-          }
+          // let result = interpreter.dostring(interpText);
+          // console.log('exec result', result);
+          // if (result != 0) {
+          //   const errStr = interpreter.getLatestError();
+          //   console.log('exec error', errStr);
+          //   Alert.alert('Error', errStr);
+          // }
         }
         setInterpText(undefined);
       }} />

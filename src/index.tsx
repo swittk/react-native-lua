@@ -84,8 +84,6 @@ export interface LuaInterpreter {
   status(): number,
   stringtonumber(arg0: string): number,
   gettable(arg0: number): number,
-  dostring(arg0: number): number,
-  dofile(arg0: number): number,
   getglobal(arg0: string): void,
   getLatestError(): string,
   var_asnumber(arg0: string): number,
