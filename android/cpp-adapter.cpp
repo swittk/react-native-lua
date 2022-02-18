@@ -2,6 +2,12 @@
 #include "react-native-lua.h"
 #include <memory>
 #include <ReactCommon/CallInvokerHolder.h>
+#include <react/jni/CxxModuleWrapper.h>
+#include <react/jni/JavaScriptExecutorHolder.h>
+#include <react/jni/JCallback.h>
+#include <fbjni/fbjni.h>
+#include <cxxreact/CxxNativeModule.h>
+
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_reactnativelua_LuaModule_nativeMultiply(JNIEnv *env, jclass type, jint a, jint b) {
@@ -10,12 +16,23 @@ Java_com_reactnativelua_LuaModule_nativeMultiply(JNIEnv *env, jclass type, jint 
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_reactnativelua_LuaModule_initialize(JNIEnv *env, jclass clazz, jlong jsi_runtime_pointer, jobject jsCallInvokerHolder) {
+Java_com_reactnativelua_LuaModule_initialize(JNIEnv *env, jclass clazz, jlong jsi_runtime_pointer,
+                                             jobject jsCallInvokerHolder) {
+    facebook::react::CallInvokerHolder *holder = (facebook::react::CallInvokerHolder *)jsCallInvokerHolder;
+//    facebook::jni::JCxxCallbackImpl::jhybridobject
+//    facebook::jni::jhybridobject;
+//    facebook::react::CallInvokerHolder::javaobject j = (facebook::react::CallInvokerHolder::javaobject)jsCallInvokerHolder;
+//    facebook::jni::alias_ref<facebook::react::CallInvokerHolder::javaobject> invoker = jsCallInvokerHolder;
+//    facebook::jni::alias_ref<facebook::react::CallInvokerHolder::javaobject> invokerWhat = (facebook::jni::alias_ref<facebook::react::CallInvokerHolder::javaobject>)jsCallInvokerHolder;
     JavaVM *jvm;
     env->GetJavaVM(&jvm);
-    facebook::react::CallInvokerHolder *holder = (facebook::react::CallInvokerHolder *)jsCallInvokerHolder;
-    auto jsCallInvoker = holder->getCallInvoker();
-    SKRNNativeLua::install(*reinterpret_cast<facebook::jsi::Runtime *>(jsi_runtime_pointer), jsCallInvoker);
+//    jclass cls = env->GetObjectClass(jsCallInvokerHolder);
+//    jfieldID field = env->GetFieldID(cls, "mHybridData", "Lcom/facebook/jni/HybridData;");
+//    env->GetObjectField()
+//    facebook::react::CallInvokerHolder *holder = jsCallInvokerHolder->cthis()->getCallInvoker();
+//    auto jsCallInvoker = holder ->getCallInvoker();
+
+    SKRNNativeLua::install(*reinterpret_cast<facebook::jsi::Runtime *>(jsi_runtime_pointer), holder->getCallInvoker());
 }
 extern "C"
 JNIEXPORT void JNICALL
