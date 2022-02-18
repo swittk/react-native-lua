@@ -7,6 +7,10 @@
 #include <react/jni/JCallback.h>
 #include <fbjni/fbjni.h>
 #include <cxxreact/CxxNativeModule.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#define printf(...) __android_log_print(ANDROID_LOG_DEBUG, "TAG", __VA_ARGS__);
+#endif
 
 extern "C"
 JNIEXPORT jint JNICALL
@@ -19,6 +23,11 @@ JNIEXPORT void JNICALL
 Java_com_reactnativelua_LuaModule_initialize(JNIEnv *env, jclass clazz, jlong jsi_runtime_pointer,
                                              jobject jsCallInvokerHolder) {
     facebook::react::CallInvokerHolder *holder = (facebook::react::CallInvokerHolder *)jsCallInvokerHolder;
+//    printf("bout to invoke");
+//    holder->getCallInvoker()->invokeAsync([]{
+//        printf("test invoking");
+//    });
+//    printf("invoked");
 //    facebook::jni::JCxxCallbackImpl::jhybridobject
 //    facebook::jni::jhybridobject;
 //    facebook::react::CallInvokerHolder::javaobject j = (facebook::react::CallInvokerHolder::javaobject)jsCallInvokerHolder;
