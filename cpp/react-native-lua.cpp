@@ -3,6 +3,10 @@ extern "C" {
 #include "lua_src/lua.h"
 #include "lua_src/lauxlib.h"
 #include "lua_src/lualib.h"
+#include "lua_luasocket/luasocket.h"
+#include "lua_luasocket/mime.h"
+#include "luasocket_lua_amalgamation.h"
+
 #include <sys/time.h>
 #include "skrnlua_multithread_define.h"
 }
@@ -76,7 +80,7 @@ void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react
                                           });
     jsiRuntime.global().setProperty(jsiRuntime, "SKRNNativeLuaNewInterpreter",
                                     std::move(newInterpreterFunction));
-
+    setLuaLibDirPath(std::string(getenv("HOME"))+"/lualibs");
 }
 //void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
 void cleanup(facebook::jsi::Runtime &jsiRuntime) {
@@ -113,6 +117,7 @@ int SKRNLuaInterpreter::staticLuaPrintHandler(lua_State *L) {
     me->luaPrintHandler(outStr.str());
     return 0;
 }
+
 void SKRNLuaInterpreter::luaPrintHandler(std::string str) {
     printOutputMutex.lock();
     printOutput.push_back(str);
@@ -137,11 +142,29 @@ static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
     }
 }
 
+// Loading luasocket as per this mailing list message : http://lua-users.org/lists/lua-l/2005-10/msg00269.html
+// which was referenced here https://stackoverflow.com/a/13264784/4469172
+// Needed to adapt a bit for modern Lua 5.4, but should work fine.
+void loadLuaSocketIntoState(lua_State *L) {
+    lua_getglobal(L, "package");
+    
+    // The preload table is used to define loaders for a module. If one is defined, then it is called before the automatic "searcher"s of Lua are called. (paraphrased http://www.playwithlua.com/?p=11)
+    lua_getfield(L, -1, "preload");
+    lua_pushcfunction(L, luaopen_socket_core);
+    lua_setfield(L, -2, "socket.core");
+    lua_pushcfunction(L, luaopen_mime_core);
+    lua_setfield(L, -2, "mime.core");
+    // pop out preload and package
+    lua_pop(L, 2);
+}
 
 void SKRNLuaInterpreter::createState() {
     
     _state = luaL_newstate();
     luaL_openlibs(_state);
+    loadLuaSocketIntoState(_state);
+    luasocket_preload_luasrc_definitions(_state);
+    
     SKRNLuaMTHelper *helper = mtHelperForLuaState(_state);
     helper->conveniencePointers[0] = (void *)this;
 //    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)helper->conveniencePointers[0];
@@ -771,6 +794,17 @@ std::vector<jsi::PropNameID> SKRNLuaInterpreter::getPropertyNames(jsi::Runtime& 
     }
     return ret;
 }
+static std::string ___luaLibDirPath;
+static std::string __luaLibDirPathEnvVariable;
+std::string getLuaLibDirPath() {
+    return ___luaLibDirPath;
+}
+void setLuaLibDirPath(std::string path) {
+    ___luaLibDirPath = path;
+    const char *ourpath = ___luaLibDirPath.c_str();
+    __luaLibDirPathEnvVariable = StringEZSprintf("%s/?.lua;%s/?/init.lua;./?.lua;./?/init.lua", ourpath, ourpath);
+}
+
 }
 #define LUAMTHELPERKEY "__SKRNMTHelper"
 void SKRNLuaMultitheadUserStateOpen(lua_State *L) {
@@ -809,3 +843,20 @@ void clearMTHelperForLuaState(lua_State *L) {
         *extraspacePointer = NULL;
     }
 }
+
+/**
+LUA_PATH_DEFAULT is like this
+ 
+LUA_LDIR"?.lua;"  LUA_LDIR"?/init.lua;" \
+LUA_CDIR"?.lua;"  LUA_CDIR"?/init.lua;" \
+"./?.lua;" "./?/init.lua"
+ 
+ we just mimic it so we can use our own directory
+*/
+const char *SKRNLuaGetLuaDefaultLibraryPATH() {
+    return SKRNNativeLua::__luaLibDirPathEnvVariable.c_str();
+}
+
+
+const char *test = R"awstring(
+                     )awstring";

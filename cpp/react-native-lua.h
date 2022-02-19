@@ -27,6 +27,8 @@ struct lua_State;
 namespace SKRNNativeLua {
   int multiply(float a, float b);
 
+std::string getLuaLibDirPath();
+void setLuaLibDirPath(std::string path);
 class SKRNLuaMTHelper {
 public:
     std::mutex mutex;

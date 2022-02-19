@@ -64,6 +64,10 @@ The property `executionLimit` defines the number of milliseconds the script shou
 - Make async `dostringasync` and `dofileasync` work on Android
     - iOS `dostringasync` is working perfectly well, however, in Android it is only possible to use `dostring` since CallInvoker crashes immediately when InvokeAsync() is called. Any help in getting this working would be very much appreciated.
 
+# Interesting read on people doing JSI development on React Native
+
+- JSI module issues : https://github.com/facebook/react-native/issues/28128
+
 
 ## Contributing
 
