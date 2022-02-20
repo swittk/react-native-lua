@@ -34,7 +34,6 @@ if(count < 1) return jsi::Value::undefined(); \
 capture \
 })
 void clearMTHelperForLuaState(lua_State *L);
-SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L);
 void SKRNLuaMultitheadUserStateOpen(lua_State *L);
 void SKRNLuaMultitheadUserStateClose(lua_State *L);
 void SKRNLuaMultitheadLuaLock(lua_State *L);
@@ -119,12 +118,14 @@ int SKRNLuaInterpreter::staticLuaPrintHandler(lua_State *L) {
 }
 
 void SKRNLuaInterpreter::luaPrintHandler(std::string str) {
-    printOutputMutex.lock();
+    std::unique_lock<std::mutex> lock = std::unique_lock<std::mutex>(printOutputMutex);
+//    printOutputMutex.lock();
     printOutput.push_back(str);
     if(printOutput.size() > maxPrintOutputCount) {
         printOutput.pop_front();
     }
-    printOutputMutex.unlock();
+//    printOutputMutex.unlock();
+    lock.unlock();
 }
 
 // Endless loop prevention hook
@@ -318,7 +319,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
                 std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
-                std::thread runThread = std::thread([&, this, userCallbackRef, myInvoker, todostring]() {
+                asyncThreadQueuer.AddJob([&, userCallbackRef, myInvoker, todostring]{
                     int ret = doString(todostring);
                     printf("ret is %d", ret);
                     executing = false;
@@ -332,7 +333,6 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                         userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
                     });
                 });
-                runThread.detach();
                 return jsi::Value::undefined();
             });
         } break;
@@ -357,19 +357,20 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
                 std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
-                std::thread runThread = std::thread([&, userCallbackRef, todostring]() {
+                asyncThreadQueuer.AddJob([&, userCallbackRef, myInvoker, todostring]{
                     int ret = doFile(todostring);
+                    printf("ret is %d", ret);
                     executing = false;
                     if(myInvoker == nullptr) return;
+                    printf("has invoker, about to invoke it");
                     myInvoker->invokeAsync([&, userCallbackRef, ret]{
-                        printf("ret is %d", ret);
                         if(userCallbackRef == nullptr) {
                             return;
                         }
+                        printf("calling userCallbackRef since it is not null");
                         userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
                     });
                 });
-                runThread.detach();
                 return jsi::Value::undefined();
             });
 
@@ -729,6 +730,12 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 return jsi::Value::undefined();
             });
         } break;
+        case "terminate"_sh: {
+            return EZ_JSI_HOST_FN_TEMPLATE(1, {
+                terminate();
+                return jsi::Value::undefined();
+            });
+        } break;
 
             //        case "size"_sh: {
             //            return ObjectFromSKRNSize(runtime, size());
@@ -785,8 +792,14 @@ static std::vector<std::string> nativeLuaInterpreterKeys = {
     "type",
     "typename",
     "yield",
-    "valid"
+    "valid",
+    "terminate"
 };
+SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L) {
+    void **extraspacePointer = (void **)lua_getextraspace(L);
+    SKRNNativeLua::SKRNLuaMTHelper *helper = (SKRNNativeLua::SKRNLuaMTHelper *)(*extraspacePointer);
+    return helper;
+}
 std::vector<jsi::PropNameID> SKRNLuaInterpreter::getPropertyNames(jsi::Runtime& rt) {
     std::vector<jsi::PropNameID> ret;
     for(std::string key : nativeLuaInterpreterKeys) {
@@ -821,17 +834,12 @@ void SKRNLuaMultitheadUserStateClose(lua_State *L) {
     clearMTHelperForLuaState(L);
 }
 void SKRNLuaMultitheadLuaLock(lua_State *L) {
-    SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
+    SKRNNativeLua::SKRNLuaMTHelper *helper = SKRNNativeLua::mtHelperForLuaState(L);
     helper->mutex.lock();
 }
 void SKRNLuaMultitheadLuaUnlock(lua_State *L) {
-    SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
+    SKRNNativeLua::SKRNLuaMTHelper *helper = SKRNNativeLua::mtHelperForLuaState(L);
     helper->mutex.unlock();
-}
-SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L) {
-    void **extraspacePointer = (void **)lua_getextraspace(L);
-    SKRNNativeLua::SKRNLuaMTHelper *helper = (SKRNNativeLua::SKRNLuaMTHelper *)(*extraspacePointer);
-    return helper;
 }
 void clearMTHelperForLuaState(lua_State *L) {
     void **extraspacePointer = (void **)lua_getextraspace(L);
@@ -856,7 +864,3 @@ LUA_CDIR"?.lua;"  LUA_CDIR"?/init.lua;" \
 const char *SKRNLuaGetLuaDefaultLibraryPATH() {
     return SKRNNativeLua::__luaLibDirPathEnvVariable.c_str();
 }
-
-
-const char *test = R"awstring(
-                     )awstring";

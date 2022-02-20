@@ -29,6 +29,7 @@ namespace SKRNNativeLua {
 
 std::string getLuaLibDirPath();
 void setLuaLibDirPath(std::string path);
+
 class SKRNLuaMTHelper {
 public:
     std::mutex mutex;
@@ -51,7 +52,7 @@ public:
 //        printf("woof %d", hid);
 //    }
 };
-
+SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L);
 
 // Heavy, heavy thanks to this answer for this solution. https://stackoverflow.com/a/48816876/4469172
 class AsyncThreadQueuer {
@@ -77,6 +78,7 @@ public:
     {
         while(!m_exitCondition)
             doJob();
+        printf("terminated worker thread");
     }
     void signalTerminateJobs() {
         m_exitCondition = true;
@@ -124,20 +126,22 @@ public:
     SKRNLuaInterpreter(std::shared_ptr<facebook::react::CallInvoker> _callInvoker) : callInvoker(_callInvoker) {
         executing = false;
         // TODO: Uncomment this when finally implementing do___async functions with asyncProcessingThread
-//        asyncProcessingThread = std::thread([&]() {
-//            asyncThreadQueuer.worker_main();
-//        });
+        asyncProcessingThread = std::thread([&]() {
+            asyncThreadQueuer.worker_main();
+        });
         printf("\nallocated addresss %lld", (long long)this);
         createState();
     }
     ~SKRNLuaInterpreter() {
-        shouldTerminate = true;
-        // TODO: Uncomment this when finally implementing do___async functions with asyncProcessingThread
-//        asyncThreadQueuer.signalTerminateJobs();
-//        printf("attempting to join for instance %lld", (long long)this);
-//        asyncProcessingThread.join();
+        terminate();
+        printf("attempting to join for instance %lld", (long long)this);
+        asyncProcessingThread.join();
         printf("\ndeallocate addresss %lld", (long long)this);
         closeStateIfNeeded();
+    }
+    void terminate() {
+        shouldTerminate = true;
+        asyncThreadQueuer.signalTerminateJobs();
     }
     void createState();
     void closeStateIfNeeded();

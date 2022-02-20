@@ -61,6 +61,11 @@ export default function App() {
     }
     return __interpreter.current;
   }, []);
+  React.useEffect(()=>{
+    return ()=>{
+      __interpreter.current?.terminate();
+    }
+  }, []);
   const refreshOutputText = React.useCallback(() => {
     const interpreter = getInterpreter();
     if (interpreter.printCount) {

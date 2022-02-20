@@ -41,6 +41,8 @@ export enum LUA_ERROR_CODE {
 export interface LuaInterpreter {
   dostringasync(str: string, callback: (code: number) => void): void,
   dofileasync(str: string, callback: (code: number) => void): void,
+  /** Call this when your interpreter involves async tasks that take forever; this allows us to terminate it (e.g. before deallocating). */
+  terminate(): void,
 
   dostring(str: string): number,
   dofile(filepath: string): number,
