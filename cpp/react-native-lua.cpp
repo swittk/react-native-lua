@@ -15,6 +15,7 @@ extern "C" {
 #include <sstream>
 #include <thread>
 #include <ReactCommon/CallInvoker.h>
+#include <ReactCommon/RuntimeExecutor.h>
 #include "skrnluaezcppstringoperations.h"
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -54,7 +55,7 @@ static int skrn_lua_sleep (lua_State *L) {
 }
 
 //std::shared_ptr<facebook::react::CallInvoker> shared_callinvoker;
-void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker) {
+void install(facebook::jsi::Runtime &jsiRuntime, facebook::react::RuntimeExecutor executor) {
     using namespace jsi;
 
 //    std::shared_ptr<facebook::react::CallInvoker> shared_callinvoker;
@@ -66,15 +67,15 @@ void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react
                                           PropNameID::forAscii(jsiRuntime, "SKRNNativeLuaNewInterpreter"),
                                           0,
                                           //                                          [&, invoker](Runtime &runtime, const Value &thisValue, const Value *arguments,
-                                          [&, invoker](jsi::Runtime &runtime, const jsi::Value &thisValue, const jsi::Value *arguments,
+                                          [&, executor](jsi::Runtime &runtime, const jsi::Value &thisValue, const jsi::Value *arguments,
                                               size_t count) -> jsi::Value
                                           {
-                                              if(invoker == nullptr) {
-                                                  printf("nullptr sad life");
-                                                  return jsi::Value::undefined();
-                                              }
+//                                              if(executor == nullptr) {
+//                                                  printf("nullptr sad life");
+//                                                  return jsi::Value::undefined();
+//                                              }
 
-                                              jsi::Object object = jsi::Object::createFromHostObject(runtime, std::make_shared<SKRNLuaInterpreter>(invoker));
+                                              jsi::Object object = jsi::Object::createFromHostObject(runtime, std::make_shared<SKRNLuaInterpreter>(executor));
                                               return object;
                                           });
     jsiRuntime.global().setProperty(jsiRuntime, "SKRNNativeLuaNewInterpreter",
@@ -148,7 +149,7 @@ static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
 // Needed to adapt a bit for modern Lua 5.4, but should work fine.
 void loadLuaSocketIntoState(lua_State *L) {
     lua_getglobal(L, "package");
-    
+
     // The preload table is used to define loaders for a module. If one is defined, then it is called before the automatic "searcher"s of Lua are called. (paraphrased http://www.playwithlua.com/?p=11)
     lua_getfield(L, -1, "preload");
     lua_pushcfunction(L, luaopen_socket_core);
@@ -160,12 +161,12 @@ void loadLuaSocketIntoState(lua_State *L) {
 }
 
 void SKRNLuaInterpreter::createState() {
-    
+
     _state = luaL_newstate();
     luaL_openlibs(_state);
     loadLuaSocketIntoState(_state);
     luasocket_preload_luasrc_definitions(_state);
-    
+
     SKRNLuaMTHelper *helper = mtHelperForLuaState(_state);
     helper->conveniencePointers[0] = (void *)this;
 //    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)helper->conveniencePointers[0];
@@ -181,7 +182,7 @@ void SKRNLuaInterpreter::createState() {
 }
 
 void SKRNLuaInterpreter::closeStateIfNeeded() {
-    callInvoker = nullptr;
+//    callInvoker = nullptr;
     printf("\nclosing state(deallocating)");
     if(_state != NULL) {
         printf("\ndoing lua_close");
@@ -296,10 +297,10 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             });
         } break;
         case "dostringasync"_sh: {
-            std::shared_ptr<react::CallInvoker> invoker = callInvoker;
-            if(callInvoker == nullptr) {
-                throw jsi::JSError(runtime, "callinvoker is null");
-            }
+//            std::shared_ptr<react::CallInvoker> invoker = callInvoker;
+//            if(callInvoker == nullptr) {
+//                throw jsi::JSError(runtime, "callinvoker is null");
+//            }
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
@@ -307,7 +308,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 throw jsi::JSError(runtime, "Runtime is executing");
             }
             return jsi::Function::createFromHostFunction
-            (runtime,name, 1, [&, invoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
+            (runtime,name, 1, [&](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
                 if(count < 2) {
                     return jsi::Value::undefined();
                 }
@@ -318,18 +319,14 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 std::string todostring = arguments[0].getString(runtime).utf8(runtime);
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
-                std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
-                asyncThreadQueuer.AddJob([&, userCallbackRef, myInvoker, todostring]{
+//                std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
+                asyncThreadQueuer.AddJob([&, userCallbackRef, todostring]{
                     int ret = doString(todostring);
                     printf("ret is %d", ret);
                     executing = false;
-                    if(myInvoker == nullptr) return;
-                    printf("has invoker, about to invoke it");
-                    myInvoker->invokeAsync([&, userCallbackRef, ret]{
-                        if(userCallbackRef == nullptr) {
-                            return;
-                        }
-                        printf("calling userCallbackRef since it is not null");
+//                    if(myInvoker == nullptr) return;
+//                    printf("has invoker, about to invoke it");
+                    facebook::react::executeSynchronously_CAN_DEADLOCK(executor, [&, userCallbackRef, ret](jsi::Runtime &runtime){
                         userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
                     });
                 });
@@ -337,10 +334,10 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
             });
         } break;
         case "dofileasync"_sh: {
-            std::shared_ptr<react::CallInvoker> invoker = callInvoker;
-            if(callInvoker == nullptr) {
-                throw jsi::JSError(runtime, "callinvoker is null");
-            }
+//            std::shared_ptr<react::CallInvoker> invoker = callInvoker;
+//            if(callInvoker == nullptr) {
+//                throw jsi::JSError(runtime, "callinvoker is null");
+//            }
             if(!valid) {
                 throw jsi::JSError(runtime, "Runtime is no longer valid");
             }
@@ -348,7 +345,7 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 throw jsi::JSError(runtime, "Runtime is executing");
             }
             return jsi::Function::createFromHostFunction
-            (runtime,name, 1, [&, invoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
+            (runtime,name, 1, [&](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
                 if(count < 2) {
                     return jsi::Value::undefined();
                 }
@@ -356,18 +353,13 @@ jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID 
                 std::string todostring = arguments[0].getString(runtime).utf8(runtime);
                 std::shared_ptr<jsi::Object> userCallbackRef =
                 std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
-                std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
-                asyncThreadQueuer.AddJob([&, userCallbackRef, myInvoker, todostring]{
+                asyncThreadQueuer.AddJob([&, userCallbackRef, todostring]{
                     int ret = doFile(todostring);
                     printf("ret is %d", ret);
                     executing = false;
-                    if(myInvoker == nullptr) return;
-                    printf("has invoker, about to invoke it");
-                    myInvoker->invokeAsync([&, userCallbackRef, ret]{
-                        if(userCallbackRef == nullptr) {
-                            return;
-                        }
-                        printf("calling userCallbackRef since it is not null");
+//                    if(myInvoker == nullptr) return;
+//                    printf("has invoker, about to invoke it");
+                    facebook::react::executeSynchronously_CAN_DEADLOCK(executor, [&, userCallbackRef, ret](jsi::Runtime &runtime){
                         userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
                     });
                 });
@@ -854,11 +846,11 @@ void clearMTHelperForLuaState(lua_State *L) {
 
 /**
 LUA_PATH_DEFAULT is like this
- 
+
 LUA_LDIR"?.lua;"  LUA_LDIR"?/init.lua;" \
 LUA_CDIR"?.lua;"  LUA_CDIR"?/init.lua;" \
 "./?.lua;" "./?/init.lua"
- 
+
  we just mimic it so we can use our own directory
 */
 const char *SKRNLuaGetLuaDefaultLibraryPATH() {

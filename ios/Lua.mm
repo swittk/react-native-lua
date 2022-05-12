@@ -5,6 +5,7 @@
 #import <jsi/jsi.h>
 #import <ReactCommon/CallInvoker.h>
 #import <ReactCommon/RCTTurboModuleManager.h>
+#import <ReactCommon/RuntimeExecutor.h>
 
 @implementation SKNativeLua
 @synthesize bridge = _bridge;
@@ -59,8 +60,17 @@ RCT_EXPORT_METHOD(multiply:(nonnull NSNumber*)a withB:(nonnull NSNumber*)b
         });
         return;
     }
+    facebook::react::RuntimeExecutor runtimeExecutor =
+      [cxxBridge](
+        std::function<void(facebook::jsi::Runtime & runtime)> &&callback) {
+        cxxBridge.jsCallInvoker->invokeAsync(
+          [cxxBridge, callback = std::move(callback)]() {
+              printf("callback about to invoke with cxxBridgeRuntime %ld", (long)cxxBridge.runtime);
+            callback(*(facebook::jsi::Runtime *)(cxxBridge.runtime));
+          });
+      };
     facebook::jsi::Runtime *runtime = (facebook::jsi::Runtime *)cxxBridge.runtime;
-    SKRNNativeLua::install(*runtime, cxxBridge.jsCallInvoker);
+    SKRNNativeLua::install(*runtime, runtimeExecutor);
 }
 
 - (void)invalidate {

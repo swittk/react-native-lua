@@ -37,13 +37,18 @@ endif()
 # set (lua_source_dir "../cpp/lua_src/")
 file(GLOB lua_source_dir_dot_c "../cpp/lua_src/*.c")
 file(GLOB lua_source_dir_dot_h "../cpp/lua_src/*.h")
+file(GLOB lua_source_socket_dir_dot_c "../cpp/lua_luasocket/*.c")
+file(GLOB lua_source_socket_dir_dot_h "../cpp/lua_luasocket/**/*.h")
 
 
 add_library(${PACKAGE_NAME}
             SHARED
             ../cpp/react-native-lua.cpp
             cpp-adapter.cpp
+            
             ${lua_source_dir_dot_c}
+            ${lua_source_socket_dir_dot_c}
+            ../cpp/lua_luasocket/luasocket_lua_amalgamation/luasocket_lua_amalgamation.c
             ${INCLUDE_JSI_CPP}
             ${INCLUDE_JSIDYNAMIC_CPP}
             "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni/ReactCommon/CallInvokerHolder.cpp"
@@ -52,13 +57,16 @@ add_library(${PACKAGE_NAME}
 # Specifies a path to native header files.
 include_directories(
             ../cpp
-            ${lua_source_dir_dot_h}
+            ../cpp/lua_src
+            ../cpp/lua_luasocket
+            ../cpp/lua_luasocket/luasocket_lua_amalgamation
             "${FBJNI_HEADERS_DIR}"
             "${NODE_MODULES_DIR}/react-native/React"
             "${NODE_MODULES_DIR}/react-native/React/Base"
             "${NODE_MODULES_DIR}/react-native/ReactCommon"
             "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
             "${NODE_MODULES_DIR}/react-native/ReactCommon/callinvoker"
+            "${NODE_MODULES_DIR}/react-native/ReactCommon/runtimeexecutor"
             "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni"
             "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/jni/react/jni/JavaScriptExecutorHolder.h"
             "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/jni/react/jni"

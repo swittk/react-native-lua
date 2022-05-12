@@ -20,6 +20,8 @@ class Runtime;
 }
 namespace react {
 class CallInvoker;
+using RuntimeExecutor =
+    std::function<void(std::function<void(jsi::Runtime &runtime)> &&callback)>;
 }
 }
 struct lua_State;
@@ -112,7 +114,7 @@ public:
     bool shouldTerminate = false;
     long long executionLimitMilliseconds = 10000;
     
-    std::shared_ptr<facebook::react::CallInvoker> callInvoker;
+    facebook::react::RuntimeExecutor executor;
     std::mutex printOutputMutex;
     std::deque<std::string> printOutput;
     int maxPrintOutputCount = 1000;
@@ -123,7 +125,7 @@ public:
     AsyncThreadQueuer asyncThreadQueuer;
         
 #pragma mark - LifeCycle Methods
-    SKRNLuaInterpreter(std::shared_ptr<facebook::react::CallInvoker> _callInvoker) : callInvoker(_callInvoker) {
+    SKRNLuaInterpreter(facebook::react::RuntimeExecutor _executor) : executor(_executor) {
         executing = false;
         // TODO: Uncomment this when finally implementing do___async functions with asyncProcessingThread
         asyncProcessingThread = std::thread([&]() {
@@ -164,7 +166,8 @@ public:
     std::vector<facebook::jsi::PropNameID> getPropertyNames(facebook::jsi::Runtime& rt);
 };
 
-void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
+//void install_withexecutor(facebook::jsi::Runtime &jsiRuntime, facebook::react::RuntimeExecutor executor);
+void install(facebook::jsi::Runtime &jsiRuntime, facebook::react::RuntimeExecutor executor);
 //void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
 void cleanup(facebook::jsi::Runtime &jsiRuntime);
 }
