@@ -104,7 +104,7 @@ export default function App() {
         //   Alert.alert('Error', errStr);
         // }
         const interpreter = getInterpreter();
-        if (Platform.OS == 'ios') {
+        // if (Platform.OS == 'ios') {
         // if (true) {
           interpreter.dostringasync(interpText, (result) => {
             console.log('exec result', result);
@@ -118,16 +118,16 @@ export default function App() {
               Alert.alert('Error', errStr);
             }
           });
-        }
-        else {
-          let result = interpreter.dostring(interpText);
-          console.log('exec result', result);
-          if (result != 0) {
-            const errStr = interpreter.getLatestError();
-            console.log('exec error', errStr);
-            Alert.alert('Error', errStr);
-          }
-        }
+        // }
+        // else {
+        //   let result = interpreter.dostring(interpText);
+        //   console.log('exec result', result);
+        //   if (result != 0) {
+        //     const errStr = interpreter.getLatestError();
+        //     console.log('exec error', errStr);
+        //     Alert.alert('Error', errStr);
+        //   }
+        // }
         setInterpText(undefined);
       }} />
       <KeyboardAvoidingView style={{ flex: 1 }}>
