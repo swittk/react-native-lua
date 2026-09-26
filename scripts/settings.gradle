@@ -1,0 +1,24 @@
+pluginManagement {
+  def reactPlugin = System.getenv("REACT_NATIVE_GRADLE_PLUGIN_DIR")
+  if (reactPlugin == null) {
+    throw new GradleException("REACT_NATIVE_GRADLE_PLUGIN_DIR is required")
+  }
+  includeBuild(reactPlugin)
+  repositories {
+    google()
+    mavenCentral()
+    gradlePluginPortal()
+  }
+}
+
+rootProject.name = "react-native-lua-modern-validation"
+include(":react-native-lua-validation")
+project(":react-native-lua-validation").projectDir = new File(settingsDir, "../android")
+
+dependencyResolutionManagement {
+  repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+  repositories {
+    google()
+    mavenCentral()
+  }
+}

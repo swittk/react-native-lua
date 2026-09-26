@@ -1,0 +1,18 @@
+{
+  "modules": {
+    "NativeLuaSpec": {
+      "type": "NativeModule",
+      "name": "SKNativeLua",
+      "platforms": ["android", "ios"],
+      "jsSrcsDir": "src",
+      "android": {
+        "javaPackageName": "com.reactnativelua"
+      },
+      "ios": {
+        "modulesProvider": {
+          "SKNativeLua": "SKNativeLua"
+        }
+      }
+    }
+  }
+}

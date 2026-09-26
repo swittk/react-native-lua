@@ -1,33 +1,66 @@
 import * as React from 'react';
 import { useRef } from 'react';
 
-import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, ScrollView, Platform } from 'react-native';
+import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, AppState, ScrollView, NativeModules, Platform } from 'react-native';
 import { LuaInterpreter, luaInterpreter, LUA_ERROR_CODE, multiply } from 'react-native-lua';
 
-const defaultInterpString = `co = coroutine.create(function ()
-for i=1,10 
-do
-  print("co", i)
-  print(i * 2)
-  coroutine.yield()
-end
+const defaultInterpString = `assert(os == nil, "unsafe os library must not be ambient")
+assert(package == nil, "filesystem/native module loading must not be ambient")
+print(_VERSION)
+print("os.execute disabled", os == nil)
+
+local socket = require("socket")
+local http = require("socket.http")
+local mime = require("mime")
+local unix = require("socket.unix")
+print(socket._VERSION)
+print("HTTP helper", type(http.request))
+print("MIME helper", type(mime.b64))
+print("TCP/UDP/Unix", type(socket.tcp), type(socket.udp), type(unix.stream))
+
+co = coroutine.create(function ()
+  for i=1,10 do
+    print("coroutine", i, i * 2)
+    coroutine.yield()
+  end
 end)
 
-i = 0
-while(i < 10)
-do
-  coroutine.resume(co)
-  sleep(1000)
-  i = i + 1
+while coroutine.status(co) ~= "dead" do
+  assert(coroutine.resume(co))
 end
 `
-const defaultAndroidString = `i = 0
-while(i < 10) 
-do print(i) i = i + 1
-end`
+function iosLaunchSetting(name: string): unknown {
+  if (Platform.OS !== 'ios') return undefined;
+  const settings = NativeModules.SettingsManager?.settings as
+    | Record<string, unknown>
+    | undefined;
+  return settings?.[name];
+}
+
+function shouldAutoRunLifecycleSmoke(): boolean {
+  const value = iosLaunchSetting('LuaLifecycleSmoke');
+  return value === true || value === 'YES' || value === '1';
+}
+
+function autoLifecycleSmokeSeconds(): number {
+  const value = iosLaunchSetting('LuaLifecycleSmokeSeconds');
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number.parseFloat(value)
+        : Number.NaN;
+  return Number.isFinite(parsed)
+    ? Math.max(1, Math.min(60, parsed))
+    : 10;
+}
+
+function lifecycleSmokeSource(seconds: number): string {
+  return `print("lifecycle before"); require("socket").sleep(${seconds}); print("lifecycle after")`;
+}
 
 function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
-  const frame = useRef<ReturnType<typeof requestAnimationFrame>>();
+  const frame = useRef<ReturnType<typeof requestAnimationFrame> | undefined>(undefined);
   const prev = useRef(Date.now());
   const animate = () => {
     const now = Date.now();
@@ -51,15 +84,65 @@ export default function App() {
   );
   const [outputText, setOutputText] = React.useState<string>();
   const tInputRef = React.useRef<TextInput>(null);
+  const [lifecycleStatus, setLifecycleStatus] = React.useState('idle');
+  const autoLifecycleStarted = React.useRef(false);
+  const lifecycleRunning = React.useRef(false);
+  const lifecycleBackgrounded = React.useRef(false);
   React.useEffect(() => {
     multiply(3, 7).then(setResult);
   }, []);
-  const __interpreter = useRef<LuaInterpreter>();
+  const __interpreter = useRef<LuaInterpreter | undefined>(undefined);
+  const createInterpreter = React.useCallback(() => luaInterpreter({
+    executionLimitMs: 60_000,
+    memoryLimitBytes: 8 * 1024 * 1024,
+    maxOutputBytes: 16 * 1024,
+    maxOutputLines: 256,
+    allowNetwork: true,
+  }), []);
   const getInterpreter = React.useCallback(() => {
     if (!__interpreter.current) {
-      __interpreter.current = luaInterpreter();
+      __interpreter.current = createInterpreter();
     }
     return __interpreter.current;
+  }, [createInterpreter]);
+  const runLifecycleSmoke = React.useCallback(
+    (seconds: number = 10) => {
+      const interpreter = getInterpreter();
+      lifecycleRunning.current = true;
+      lifecycleBackgrounded.current = false;
+      setLifecycleStatus(`running ${seconds}s`);
+      interpreter.dostringasync(lifecycleSmokeSource(seconds), (code) => {
+        lifecycleRunning.current = false;
+        setLifecycleStatus(
+          `result ${code}${lifecycleBackgrounded.current ? ' after background' : ''}`,
+        );
+        console.log('lifecycle result', code);
+      });
+    },
+    [getInterpreter],
+  );
+
+  React.useEffect(() => {
+    if (!autoLifecycleStarted.current && shouldAutoRunLifecycleSmoke()) {
+      autoLifecycleStarted.current = true;
+      runLifecycleSmoke(autoLifecycleSmokeSeconds());
+    }
+  }, [runLifecycleSmoke]);
+
+  React.useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (lifecycleRunning.current && nextState !== 'active') {
+        lifecycleBackgrounded.current = true;
+        setLifecycleStatus(current =>
+          current.includes('background') ? current : `${current} (backgrounded)`,
+        );
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+  React.useEffect(() => () => {
+    __interpreter.current?.destroy();
+    __interpreter.current = undefined;
   }, []);
   const refreshOutputText = React.useCallback(() => {
     const interpreter = getInterpreter();
@@ -88,13 +171,21 @@ export default function App() {
   return (
     <View style={styles.container}>
       <View style={{ height: 20 }} />
-      <Button title='Reload New Interpreter' onPress={() => {
-        __interpreter.current = luaInterpreter();
+      <Text>Native multiply smoke test: {result ?? 'loading'} (expected 21)</Text>
+      <Text accessibilityLabel='Lifecycle status'>Lifecycle smoke: {lifecycleStatus}</Text>
+      <Button accessibilityLabel='Reload New Interpreter' title='Reload New Interpreter' onPress={() => {
+        __interpreter.current?.destroy();
+        __interpreter.current = createInterpreter();
       }} />
-      <Button title='Dismiss Keyboard' onPress={() => {
+      <Button
+        accessibilityLabel='Lifecycle 10s'
+        title='Lifecycle 10s'
+        onPress={() => runLifecycleSmoke(10)}
+      />
+      <Button accessibilityLabel='Dismiss Keyboard' title='Dismiss Keyboard' onPress={() => {
         tInputRef.current?.blur();
       }} />
-      <Button title='Execute' onPress={() => {
+      <Button accessibilityLabel='Execute Lua' title='Execute' onPress={() => {
         if (!interpText) return;
         // let result = interpreter.current.dostring(interpText);
         // console.log('exec result', result);
@@ -132,12 +223,12 @@ export default function App() {
       }} />
       <KeyboardAvoidingView style={{ flex: 1 }}>
         <TextInput
+          accessibilityLabel='Lua source'
           ref={tInputRef}
           style={styles.textInput}
           textAlignVertical='top'
           multiline={true}
           autoCapitalize='none'
-          autoCompleteType='off'
           autoCorrect={false}
           onChangeText={setInterpText}
           value={interpText}
@@ -150,6 +241,7 @@ export default function App() {
         </Text>
       </ScrollView>
       <Button
+        accessibilityLabel='Refresh Output'
         title='Refresh Output'
         onPress={refreshOutputText}
       />

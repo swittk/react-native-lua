@@ -1,813 +1,612 @@
 #include "react-native-lua.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <stdexcept>
+#include <utility>
+
 extern "C" {
-#include "lua_src/lua.h"
 #include "lua_src/lauxlib.h"
-#include "lua_src/lualib.h"
-#include <sys/time.h>
-#include "skrnlua_multithread_define.h"
+#include "lua_src/lua.h"
 }
-#include <jsi/jsi.h>
-#include "CPPNumericStringHashCompare.h"
-#include <sstream>
-#include <thread>
-#include <ReactCommon/CallInvoker.h>
-#include "skrnluaezcppstringoperations.h"
-#ifdef __ANDROID__
-#include <android/log.h>
-#define printf(...) __android_log_print(ANDROID_LOG_DEBUG, "TAG", __VA_ARGS__);
-#endif
-
-#define EZ_JSI_HOST_FN_TEMPLATE(numArgs, capture) jsi::Function::createFromHostFunction\
-(runtime, name, numArgs,\
-[&](facebook::jsi::Runtime &runtime,\
-const facebook::jsi::Value &thisValue,\
-const facebook::jsi::Value *arguments,\
-size_t count) -> jsi::Value \
-{capture}) \
-
-#define EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE(capture) EZ_JSI_HOST_FN_TEMPLATE(1, { \
-if(count < 1) return jsi::Value::undefined(); \
-capture \
-})
-void clearMTHelperForLuaState(lua_State *L);
-SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L);
-void SKRNLuaMultitheadUserStateOpen(lua_State *L);
-void SKRNLuaMultitheadUserStateClose(lua_State *L);
-void SKRNLuaMultitheadLuaLock(lua_State *L);
-void SKRNLuaMultitheadLuaUnlock(lua_State *L);
 
 namespace SKRNNativeLua {
-using namespace facebook;
+namespace {
 
-static long long getLuaStateStartExecutionTime(lua_State *L);
-static long long currentMillisecondsSinceEpoch();
+namespace jsi = facebook::jsi;
 
-static int skrn_lua_sleep (lua_State *L) {
-    double ms = luaL_checknumber(L, 1);
-    //check and fetch the arguments
-    std::this_thread::sleep_for(std::chrono::milliseconds((int)ms));
-    //return number of results
-    return 0;
+template <typename Function>
+jsi::Value makeHostFunction(
+    jsi::Runtime& runtime,
+    const jsi::PropNameID& name,
+    unsigned int argumentCount,
+    Function&& function) {
+  return jsi::Function::createFromHostFunction(
+      runtime,
+      name,
+      argumentCount,
+      std::forward<Function>(function));
 }
 
-//std::shared_ptr<facebook::react::CallInvoker> shared_callinvoker;
-void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker) {
-    using namespace jsi;
-
-//    std::shared_ptr<facebook::react::CallInvoker> shared_callinvoker;
-    // This is stupid using a global variable, but just adding this to try prevent android from crashing.
-//    shared_callinvoker = invoker;
-    auto newInterpreterFunction =
-    jsi::Function::createFromHostFunction(
-                                          jsiRuntime,
-                                          PropNameID::forAscii(jsiRuntime, "SKRNNativeLuaNewInterpreter"),
-                                          0,
-                                          //                                          [&, invoker](Runtime &runtime, const Value &thisValue, const Value *arguments,
-                                          [&, invoker](jsi::Runtime &runtime, const jsi::Value &thisValue, const jsi::Value *arguments,
-                                              size_t count) -> jsi::Value
-                                          {
-                                              if(invoker == nullptr) {
-                                                  printf("nullptr sad life");
-                                                  return jsi::Value::undefined();
-                                              }
-
-                                              jsi::Object object = jsi::Object::createFromHostObject(runtime, std::make_shared<SKRNLuaInterpreter>(invoker));
-                                              return object;
-                                          });
-    jsiRuntime.global().setProperty(jsiRuntime, "SKRNNativeLuaNewInterpreter",
-                                    std::move(newInterpreterFunction));
-
+double numberOption(
+    jsi::Runtime& runtime,
+    const jsi::Object& options,
+    const char* name,
+    double fallback) {
+  const jsi::Value value = options.getProperty(runtime, name);
+  if (!value.isNumber()) {
+    return fallback;
+  }
+  const double number = value.asNumber();
+  return std::isfinite(number) ? number : fallback;
 }
-//void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
-void cleanup(facebook::jsi::Runtime &jsiRuntime) {
-//        shared_callinvoker = nullptr;
-    // shared_callinvoker = null
+
+bool boolOption(
+    jsi::Runtime& runtime,
+    const jsi::Object& options,
+    const char* name,
+    bool fallback) {
+  const jsi::Value value = options.getProperty(runtime, name);
+  return value.isBool() ? value.getBool() : fallback;
 }
+
+rnlua::InterpreterOptions interpreterOptions(
+    jsi::Runtime& runtime,
+    const jsi::Value* arguments,
+    std::size_t count) {
+  rnlua::InterpreterOptions result;
+  if (count == 0 || !arguments[0].isObject()) {
+    return result;
+  }
+
+  const jsi::Object options = arguments[0].asObject(runtime);
+  result.executionLimitMs = static_cast<std::int64_t>(std::clamp(
+      numberOption(runtime, options, "executionLimitMs", result.executionLimitMs),
+      1.0, 300'000.0));
+  result.memoryLimitBytes = static_cast<std::size_t>(std::clamp(
+      numberOption(runtime, options, "memoryLimitBytes", result.memoryLimitBytes),
+      0.0, 256.0 * 1024.0 * 1024.0));
+  result.maxOutputBytes = static_cast<std::size_t>(std::clamp(
+      numberOption(runtime, options, "maxOutputBytes", result.maxOutputBytes),
+      0.0, 1024.0 * 1024.0));
+  result.maxOutputLines = static_cast<std::size_t>(std::clamp(
+      numberOption(runtime, options, "maxOutputLines", result.maxOutputLines),
+      0.0, 10'000.0));
+  result.allowFileSystem =
+      boolOption(runtime, options, "allowFileSystem", result.allowFileSystem);
+  result.allowBytecode =
+      boolOption(runtime, options, "allowBytecode", result.allowBytecode);
+  result.allowNetwork =
+      boolOption(runtime, options, "allowNetwork", result.allowNetwork);
+  // JS callers may opt into file loading or bytecode. Networking is bundled
+  // by default but can be removed per interpreter; process, filesystem module
+  // loading, and debug APIs are never ambient.
+  return result;
+}
+
+jsi::Object executionResultObject(
+    jsi::Runtime& runtime,
+    const rnlua::ExecutionResult& result) {
+  jsi::Object value(runtime);
+  value.setProperty(runtime, "code", result.code);
+  value.setProperty(runtime, "luaStatus", result.luaStatus);
+  value.setProperty(runtime, "reason", result.reason);
+  value.setProperty(runtime, "error", result.error);
+  value.setProperty(runtime, "durationMs", result.durationMs);
+  value.setProperty(
+      runtime, "memoryUsedBytes", static_cast<double>(result.memoryUsedBytes));
+  value.setProperty(
+      runtime, "peakMemoryBytes", static_cast<double>(result.peakMemoryBytes));
+  value.setProperty(runtime, "outputTruncated", result.outputTruncated);
+  return value;
+}
+
+const std::vector<std::string> kInterpreterKeys = {
+    "dostringasync", "dofileasync", "dostring", "dofile", "printCount",
+    "executeStringResult", "executeFileResult", "startStringAsync",
+    "startFileAsync", "takeAsyncResult", "executing",
+    "getPrint", "getLatestError", "pop", "pushboolean", "pushglobaltable",
+    "pushinteger", "pushnil", "pushnumber", "pushstring", "pushthread",
+    "pushvalue", "rawequal", "rawget", "rawgeti", "rawlen", "rawset",
+    "rawseti", "remove", "insert", "replace", "resetthread", "resume",
+    "rotate", "setfield", "setglobal", "seti", "setiuservalue",
+    "setmetatable", "settable", "settop", "gettop", "status",
+    "stringtonumber", "gettable", "getglobal", "var_asnumber", "toboolean",
+    "toclose", "tointeger", "tonumber", "tostring", "topointer",
+    "tothread", "type", "typename", "yield", "valid", "executionLimit",
+    "setExecutionLimit",
+    "memoryLimitBytes", "setMemoryLimitBytes", "memoryUsedBytes",
+    "peakMemoryBytes", "maxOutputBytes", "setMaxOutputBytes",
+    "maxOutputLines", "setMaxOutputLines", "outputTruncated", "cancel",
+    "destroy"};
+
+} // namespace
+
+SKRNLuaInterpreter::SKRNLuaInterpreter(
+    std::shared_ptr<facebook::react::CallInvoker>,
+    rnlua::InterpreterOptions options)
+    : lua_(new rnlua::LuaRuntime(options)),
+      state_(lua_->stateForAdvancedUse()) {}
+
+SKRNLuaInterpreter::~SKRNLuaInterpreter() {
+  shutdown();
+}
+
+int SKRNLuaInterpreter::doString(const std::string& source) {
+  if (lua_ == nullptr || !lua_->isOpen()) {
+    return rnlua::kDestroyed;
+  }
+  return lua_->executeString(source).code;
+}
+
+int SKRNLuaInterpreter::doFile(const std::string& path) {
+  if (lua_ == nullptr || !lua_->isOpen()) {
+    return rnlua::kDestroyed;
+  }
+  return lua_->executeFile(path).code;
+}
+
+std::string SKRNLuaInterpreter::getLatestError() const {
+  return lua_ == nullptr ? "Interpreter is destroyed" : lua_->latestError();
+}
+
+std::uint64_t SKRNLuaInterpreter::startAsync(
+    const std::string& source,
+    bool isFile) {
+  if (destroyed_.load() || lua_ == nullptr || !lua_->isOpen()) {
+    throw std::runtime_error("Lua interpreter is destroyed");
+  }
+  bool expected = false;
+  if (!executing_.compare_exchange_strong(expected, true)) {
+    throw std::runtime_error("Lua interpreter is already executing");
+  }
+
+  joinCompletedWorker();
+  lua_->resetCancellation();
+  const std::uint64_t taskId = nextTaskId_.fetch_add(1);
+  try {
+    worker_ = std::thread([this, taskId, source, isFile] {
+      rnlua::ExecutionResult result;
+      try {
+        result = isFile ? lua_->executeFile(source) : lua_->executeString(source);
+      } catch (const std::exception& error) {
+        result.code = LUA_ERRRUN;
+        result.luaStatus = LUA_ERRRUN;
+        result.reason = "runtime";
+        result.error = error.what();
+      } catch (...) {
+        result.code = LUA_ERRRUN;
+        result.luaStatus = LUA_ERRRUN;
+        result.reason = "runtime";
+        result.error = "Unknown native execution failure";
+      }
+      {
+        std::lock_guard<std::mutex> lock(resultMutex_);
+        asyncResults_.push_back({taskId, std::move(result)});
+        while (asyncResults_.size() > 16) {
+          asyncResults_.pop_front();
+        }
+        // Publish completion while holding the same lock used by result
+        // polling, so JS cannot observe a result while `executing` is stale.
+        executing_.store(false);
+      }
+    });
+  } catch (...) {
+    executing_.store(false);
+    throw;
+  }
+  return taskId;
+}
+
+bool SKRNLuaInterpreter::takeAsyncResult(
+    std::uint64_t taskId,
+    rnlua::ExecutionResult& result) {
+  std::lock_guard<std::mutex> lock(resultMutex_);
+  auto item = std::find_if(
+      asyncResults_.begin(),
+      asyncResults_.end(),
+      [taskId](const AsyncResult& candidate) {
+        return candidate.taskId == taskId;
+      });
+  if (item == asyncResults_.end()) {
+    return false;
+  }
+  result = std::move(item->result);
+  asyncResults_.erase(item);
+  return true;
+}
+
+void SKRNLuaInterpreter::joinCompletedWorker() {
+  if (worker_.joinable()) {
+    worker_.join();
+  }
+}
+
+void SKRNLuaInterpreter::shutdown() noexcept {
+  if (destroyed_.exchange(true)) {
+    return;
+  }
+  if (lua_ != nullptr) {
+    lua_->requestCancellation();
+  }
+  joinCompletedWorker();
+  if (lua_ != nullptr) {
+    lua_->close();
+  }
+  state_ = nullptr;
+  executing_.store(false);
+}
+
+void SKRNLuaInterpreter::withState(
+    const std::function<void(lua_State*)>& callback) {
+  if (lua_ == nullptr || destroyed_.load()) {
+    throw std::runtime_error("Interpreter is destroyed");
+  }
+  if (executing_.load()) {
+    throw std::runtime_error("Interpreter is executing");
+  }
+  lua_->withState(callback);
+}
+
+jsi::Value SKRNLuaInterpreter::get(
+    jsi::Runtime& runtime,
+    const jsi::PropNameID& name) {
+  const std::string method = name.utf8(runtime);
+  const auto self = shared_from_this();
+  const auto state = [self, &runtime]() -> lua_State* {
+    if (self->lua_ == nullptr || !self->lua_->isOpen() || self->state_ == nullptr) {
+      throw jsi::JSError(runtime, "Lua interpreter is destroyed");
+    }
+    if (self->executing_.load()) {
+      throw jsi::JSError(runtime, "Lua interpreter is executing asynchronously");
+    }
+    return self->state_;
+  };
+
+  if (method == "valid") {
+    return jsi::Value(!destroyed_.load() && lua_ != nullptr && lua_->isOpen());
+  }
+  if (method == "executing") {
+    return jsi::Value(executing_.load());
+  }
+  if (method == "printCount") {
+    return jsi::Value(static_cast<double>(lua_ == nullptr ? 0 : lua_->outputCount()));
+  }
+  if (method == "executionLimit") {
+    return jsi::Value(static_cast<double>(lua_->executionLimitMs()));
+  }
+  if (method == "memoryLimitBytes") {
+    return jsi::Value(static_cast<double>(lua_->memoryLimitBytes()));
+  }
+  if (method == "memoryUsedBytes") {
+    return jsi::Value(static_cast<double>(lua_->memoryUsedBytes()));
+  }
+  if (method == "peakMemoryBytes") {
+    return jsi::Value(static_cast<double>(lua_->peakMemoryBytes()));
+  }
+  if (method == "maxOutputBytes") {
+    return jsi::Value(static_cast<double>(lua_->maxOutputBytes()));
+  }
+  if (method == "maxOutputLines") {
+    return jsi::Value(static_cast<double>(lua_->maxOutputLines()));
+  }
+  if (method == "outputTruncated") {
+    return jsi::Value(lua_->outputWasTruncated());
+  }
+
+  if (method == "getPrint") {
+    return makeHostFunction(runtime, name, 1, [self](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* arguments,
+        std::size_t count) -> jsi::Value {
+      const std::size_t requested = count > 0 && arguments[0].isNumber()
+          ? static_cast<std::size_t>(std::max(0.0, arguments[0].asNumber()))
+          : 0;
+      return jsi::String::createFromUtf8(runtime, self->lua_->takeOutput(requested));
+    });
+  }
+  if (method == "getLatestError") {
+    return makeHostFunction(runtime, name, 0, [self](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value*,
+        std::size_t) -> jsi::Value {
+      if (self->executing_.load()) {
+        throw jsi::JSError(runtime, "Lua interpreter is executing asynchronously");
+      }
+      return jsi::String::createFromUtf8(runtime, self->getLatestError());
+    });
+  }
+  if (method == "dostring" || method == "dofile" ||
+      method == "executeStringResult" || method == "executeFileResult") {
+    const bool isFile = method == "dofile" || method == "executeFileResult";
+    const bool structured =
+        method == "executeStringResult" || method == "executeFileResult";
+    return makeHostFunction(runtime, name, 1, [self, isFile, structured](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* arguments,
+        std::size_t count) -> jsi::Value {
+      if (count < 1 || !arguments[0].isString()) {
+        throw jsi::JSError(runtime, "Expected a Lua source string");
+      }
+      if (self->executing_.exchange(true)) {
+        throw jsi::JSError(runtime, "Lua interpreter is already executing");
+      }
+      try {
+        self->joinCompletedWorker();
+        self->lua_->resetCancellation();
+        const std::string value = arguments[0].asString(runtime).utf8(runtime);
+        const rnlua::ExecutionResult result = isFile
+            ? self->lua_->executeFile(value)
+            : self->lua_->executeString(value);
+        self->executing_.store(false);
+        return structured
+            ? jsi::Value(executionResultObject(runtime, result))
+            : jsi::Value(result.code);
+      } catch (...) {
+        self->executing_.store(false);
+        throw;
+      }
+    });
+  }
+  if (method == "dostringasync" || method == "dofileasync" ||
+      method == "startStringAsync" || method == "startFileAsync") {
+    const bool isFile = method == "dofileasync" || method == "startFileAsync";
+    const bool legacyName = method == "dostringasync" || method == "dofileasync";
+    return makeHostFunction(runtime, name, legacyName ? 2 : 1, [self, isFile, legacyName](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* arguments,
+        std::size_t count) -> jsi::Value {
+      if (count < 1 || !arguments[0].isString()) {
+        throw jsi::JSError(runtime, "Expected a Lua source string");
+      }
+      const std::string value = arguments[0].asString(runtime).utf8(runtime);
+      try {
+        const std::uint64_t taskId = self->startAsync(value, isFile);
+        // Public legacy callbacks are implemented by the TypeScript wrapper so
+        // no jsi::Function or runtime pointer crosses the worker boundary.
+        return legacyName
+            ? jsi::Value::undefined()
+            : jsi::Value(static_cast<double>(taskId));
+      } catch (const std::exception& error) {
+        throw jsi::JSError(runtime, error.what());
+      }
+    });
+  }
+  if (method == "takeAsyncResult") {
+    return makeHostFunction(runtime, name, 1, [self](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* arguments,
+        std::size_t count) -> jsi::Value {
+      if (count < 1 || !arguments[0].isNumber()) {
+        throw jsi::JSError(runtime, "Expected an async task id");
+      }
+      rnlua::ExecutionResult result;
+      if (!self->takeAsyncResult(
+              static_cast<std::uint64_t>(arguments[0].asNumber()), result)) {
+        return jsi::Value::null();
+      }
+      return executionResultObject(runtime, result);
+    });
+  }
+  if (method == "setExecutionLimit" || method == "setMemoryLimitBytes" ||
+      method == "setMaxOutputBytes" || method == "setMaxOutputLines") {
+    return makeHostFunction(runtime, name, 1, [self, method](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* arguments,
+        std::size_t count) -> jsi::Value {
+      if (count < 1 || !arguments[0].isNumber()) {
+        throw jsi::JSError(runtime, "Expected a numeric limit");
+      }
+      if (self->executing_.load()) {
+        throw jsi::JSError(runtime, "Cannot change limits while Lua is executing");
+      }
+      double value = arguments[0].asNumber();
+      if (!std::isfinite(value)) {
+        throw jsi::JSError(runtime, "Limit must be finite");
+      }
+      if (method == "setExecutionLimit") {
+        value = std::clamp(value, 1.0, 300'000.0);
+        self->lua_->setExecutionLimitMs(static_cast<std::int64_t>(value));
+      } else if (method == "setMemoryLimitBytes") {
+        value = std::clamp(value, 0.0, 256.0 * 1024.0 * 1024.0);
+        self->lua_->setMemoryLimitBytes(static_cast<std::size_t>(value));
+      } else if (method == "setMaxOutputBytes") {
+        value = std::clamp(value, 0.0, 1024.0 * 1024.0);
+        self->lua_->setMaxOutputBytes(static_cast<std::size_t>(value));
+      } else {
+        value = std::clamp(value, 0.0, 10'000.0);
+        self->lua_->setMaxOutputLines(static_cast<std::size_t>(value));
+      }
+      return jsi::Value::undefined();
+    });
+  }
+  if (method == "cancel") {
+    return makeHostFunction(runtime, name, 0, [self](
+        jsi::Runtime&, const jsi::Value&, const jsi::Value*, std::size_t) {
+      self->lua_->requestCancellation();
+      return jsi::Value::undefined();
+    });
+  }
+  if (method == "destroy") {
+    return makeHostFunction(runtime, name, 0, [self](
+        jsi::Runtime&, const jsi::Value&, const jsi::Value*, std::size_t) {
+      self->shutdown();
+      return jsi::Value::undefined();
+    });
+  }
+
+  if (method == "pop") {
+    return makeHostFunction(runtime, name, 1, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
+      if (n < 1) throw jsi::JSError(runtime, "Expected count");
+      lua_pop(state(), static_cast<int>(a[0].asNumber()));
+      return jsi::Value::undefined();
+    });
+  }
+  if (method == "pushboolean" || method == "pushinteger" || method == "pushnumber") {
+    return makeHostFunction(runtime, name, 1, [state, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
+      if (n < 1 || !a[0].isNumber()) throw jsi::JSError(runtime, "Expected number");
+      if (method == "pushboolean") lua_pushboolean(state(), a[0].asNumber() != 0);
+      else if (method == "pushinteger") lua_pushinteger(state(), static_cast<lua_Integer>(a[0].asNumber()));
+      else lua_pushnumber(state(), a[0].asNumber());
+      return jsi::Value::undefined();
+    });
+  }
+  if (method == "pushnil" || method == "pushglobaltable") {
+    return makeHostFunction(runtime, name, 0, [state, method](jsi::Runtime&, const jsi::Value&, const jsi::Value*, std::size_t) {
+      if (method == "pushnil") lua_pushnil(state()); else lua_pushglobaltable(state());
+      return jsi::Value::undefined();
+    });
+  }
+  if (method == "pushstring") {
+    return makeHostFunction(runtime, name, 1, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
+      if (n < 1 || !a[0].isString()) throw jsi::JSError(runtime, "Expected string");
+      const std::string value = a[0].asString(runtime).utf8(runtime);
+      lua_pushlstring(state(), value.data(), value.size());
+      return jsi::Value::undefined();
+    });
+  }
+  if (method == "pushthread") {
+    return makeHostFunction(runtime, name, 0, [state](jsi::Runtime&, const jsi::Value&, const jsi::Value*, std::size_t) {
+      return jsi::Value(lua_pushthread(state()));
+    });
+  }
+  if (method == "pushvalue" || method == "rawget" || method == "rawlen" ||
+      method == "rawset" || method == "remove" || method == "insert" ||
+      method == "replace" || method == "setmetatable" || method == "settable" ||
+      method == "settop" || method == "gettable" || method == "toboolean" ||
+      method == "toclose" || method == "tointeger" || method == "tonumber" ||
+      method == "tostring" || method == "topointer" ||
+      method == "tothread" || method == "type") {
+    return makeHostFunction(runtime, name, 1, [state, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) -> jsi::Value {
+      const int index = n > 0 && a[0].isNumber() ? static_cast<int>(a[0].asNumber()) : -1;
+      lua_State* L = state();
+      if (method == "pushvalue") { lua_pushvalue(L, index); return jsi::Value::undefined(); }
+      if (method == "rawget") return jsi::Value(lua_rawget(L, index));
+      if (method == "rawlen") return jsi::Value(static_cast<double>(lua_rawlen(L, index)));
+      if (method == "rawset") { lua_rawset(L, index); return jsi::Value::undefined(); }
+      if (method == "remove") { lua_remove(L, index); return jsi::Value::undefined(); }
+      if (method == "insert") { lua_insert(L, index); return jsi::Value::undefined(); }
+      if (method == "replace") { lua_replace(L, index); return jsi::Value::undefined(); }
+      if (method == "setmetatable") return jsi::Value(lua_setmetatable(L, index));
+      if (method == "settable") { lua_settable(L, index); return jsi::Value::undefined(); }
+      if (method == "settop") { lua_settop(L, index); return jsi::Value::undefined(); }
+      if (method == "gettable") return jsi::Value(lua_gettable(L, index));
+      if (method == "toboolean") return jsi::Value(lua_toboolean(L, index));
+      if (method == "toclose") { lua_toclose(L, index); return jsi::Value::undefined(); }
+      if (method == "tointeger") return jsi::Value(static_cast<double>(lua_tointeger(L, index)));
+      if (method == "tonumber") return jsi::Value(lua_tonumber(L, index));
+      if (method == "tostring") {
+        std::size_t size = 0;
+        const char* value = lua_tolstring(L, index, &size);
+        return value == nullptr ? jsi::Value::null() : jsi::String::createFromUtf8(runtime, std::string(value, size));
+      }
+      if (method == "topointer") return jsi::Value(static_cast<double>(reinterpret_cast<std::uintptr_t>(lua_topointer(L, index))));
+      if (method == "tothread") return jsi::Value(static_cast<double>(reinterpret_cast<std::uintptr_t>(lua_tothread(L, index))));
+      return jsi::Value(lua_type(L, index));
+    });
+  }
+  if (method == "rawequal" || method == "rawgeti" || method == "rawseti" ||
+      method == "rotate" || method == "seti" || method == "setiuservalue") {
+    return makeHostFunction(runtime, name, 2, [state, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) -> jsi::Value {
+      if (n < 2 || !a[0].isNumber() || !a[1].isNumber()) throw jsi::JSError(runtime, "Expected two numbers");
+      const int first = static_cast<int>(a[0].asNumber());
+      const lua_Integer second = static_cast<lua_Integer>(a[1].asNumber());
+      lua_State* L = state();
+      if (method == "rawequal") return jsi::Value(lua_rawequal(L, first, static_cast<int>(second)));
+      if (method == "rawgeti") return jsi::Value(lua_rawgeti(L, first, second));
+      if (method == "rawseti") { lua_rawseti(L, first, second); return jsi::Value::undefined(); }
+      if (method == "rotate") { lua_rotate(L, first, static_cast<int>(second)); return jsi::Value::undefined(); }
+      if (method == "seti") { lua_seti(L, first, second); return jsi::Value::undefined(); }
+      return jsi::Value(lua_setiuservalue(L, first, static_cast<int>(second)));
+    });
+  }
+  if (method == "setfield") {
+    return makeHostFunction(runtime, name, 2, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
+      if (n < 2 || !a[0].isNumber() || !a[1].isString()) throw jsi::JSError(runtime, "Expected index and field");
+      const std::string key = a[1].asString(runtime).utf8(runtime);
+      lua_setfield(state(), static_cast<int>(a[0].asNumber()), key.c_str());
+      return jsi::Value::undefined();
+    });
+  }
+  if (method == "setglobal" || method == "getglobal" || method == "var_asnumber" || method == "stringtonumber") {
+    return makeHostFunction(runtime, name, 1, [state, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) -> jsi::Value {
+      if (n < 1 || !a[0].isString()) throw jsi::JSError(runtime, "Expected string");
+      const std::string value = a[0].asString(runtime).utf8(runtime);
+      lua_State* L = state();
+      if (method == "setglobal") { lua_setglobal(L, value.c_str()); return jsi::Value::undefined(); }
+      if (method == "getglobal") { lua_getglobal(L, value.c_str()); return jsi::Value::undefined(); }
+      if (method == "stringtonumber") return jsi::Value(static_cast<double>(lua_stringtonumber(L, value.c_str())));
+      lua_getglobal(L, value.c_str());
+      const lua_Number result = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0;
+      lua_pop(L, 1);
+      return jsi::Value(result);
+    });
+  }
+  if (method == "typename") {
+    return makeHostFunction(runtime, name, 1, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
+      if (n < 1 || !a[0].isNumber()) throw jsi::JSError(runtime, "Expected type number");
+      return jsi::String::createFromUtf8(runtime, lua_typename(state(), static_cast<int>(a[0].asNumber())));
+    });
+  }
+  if (method == "gettop" || method == "status" || method == "resetthread") {
+    return makeHostFunction(runtime, name, 0, [state, method](jsi::Runtime&, const jsi::Value&, const jsi::Value*, std::size_t) {
+      if (method == "gettop") return jsi::Value(lua_gettop(state()));
+      if (method == "status") return jsi::Value(lua_status(state()));
+      return jsi::Value(lua_resetthread(state()));
+    });
+  }
+  if (method == "resume") {
+    return makeHostFunction(runtime, name, 2, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) -> jsi::Value {
+      if (n < 2) throw jsi::JSError(runtime, "Expected thread handle and argument count");
+      auto* from = reinterpret_cast<lua_State*>(static_cast<std::uintptr_t>(a[0].asNumber()));
+      int results = 0;
+      const int code = lua_resume(state(), from, static_cast<int>(a[1].asNumber()), &results);
+      jsi::Object value(runtime);
+      value.setProperty(runtime, "result", code);
+      value.setProperty(runtime, "nresults", results);
+      return value;
+    });
+  }
+  if (method == "yield") {
+    return makeHostFunction(runtime, name, 1, [](jsi::Runtime& runtime,
+        const jsi::Value&, const jsi::Value*, std::size_t) -> jsi::Value {
+      throw jsi::JSError(
+          runtime,
+          "yield cannot safely cross a JSI HostFunction boundary; use Lua coroutine APIs");
+    });
+  }
+
+  return jsi::Value::undefined();
+}
+
+std::vector<jsi::PropNameID> SKRNLuaInterpreter::getPropertyNames(jsi::Runtime& runtime) {
+  std::vector<jsi::PropNameID> result;
+  result.reserve(kInterpreterKeys.size());
+  for (const std::string& key : kInterpreterKeys) {
+    result.push_back(jsi::PropNameID::forUtf8(runtime, key));
+  }
+  return result;
+}
+
+void install(
+    jsi::Runtime& runtime,
+    std::shared_ptr<facebook::react::CallInvoker>) {
+  auto factory = jsi::Function::createFromHostFunction(
+      runtime,
+      jsi::PropNameID::forAscii(runtime, "SKRNNativeLuaNewInterpreter"),
+      1,
+      [](jsi::Runtime& runtime, const jsi::Value&,
+         const jsi::Value* arguments, std::size_t count) -> jsi::Value {
+        auto interpreter = std::make_shared<SKRNLuaInterpreter>(
+            nullptr, interpreterOptions(runtime, arguments, count));
+        return jsi::Object::createFromHostObject(runtime, std::move(interpreter));
+      });
+  runtime.global().setProperty(
+      runtime, "SKRNNativeLuaNewInterpreter", std::move(factory));
+}
+
+void cleanup(jsi::Runtime& runtime) {
+  runtime.global().setProperty(
+      runtime, "SKRNNativeLuaNewInterpreter", jsi::Value::undefined());
+}
+
 int multiply(float a, float b) {
-    return a * b;
+  return static_cast<int>(a * b);
 }
 
-// Inspired by answer to https://stackoverflow.com/a/4514193/4469172
-int SKRNLuaInterpreter::staticLuaPrintHandler(lua_State *L) {
-    SKRNLuaInterpreter *me = (SKRNLuaInterpreter *)lua_touserdata(L, lua_upvalueindex(1));
-    int nargs = lua_gettop(L);
-    std::stringstream outStr;
-    for (int i=1; i <= nargs; i++) {
-        // Mimicking what luaB_print does; add a \t if it's idx > 1
-        if(i > 1) {
-            outStr << "\t";
-        }
-
-        if (lua_isstring(L, i)) {
-            /* Pop the next arg using lua_tostring(L, i) and do your print */
-            const char *str = lua_tostring(L, i);
-            outStr << str;
-        }
-        else {
-            // Mimicking what luaB_print does; convert to string and just print
-            size_t strSize = 0;
-            const char *s = lua_tolstring(L, i, &strSize);
-            outStr << std::string(s, strSize);
-        }
-    }
-    me->luaPrintHandler(outStr.str());
-    return 0;
-}
-void SKRNLuaInterpreter::luaPrintHandler(std::string str) {
-    printOutputMutex.lock();
-    printOutput.push_back(str);
-    if(printOutput.size() > maxPrintOutputCount) {
-        printOutput.pop_front();
-    }
-    printOutputMutex.unlock();
-}
-
-// Endless loop prevention hook
-// Inspired by https://stackoverflow.com/a/7083653/4469172
-static void luaState_debug_hook(lua_State* L, lua_Debug *ar)
-{
-    SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
-    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)helper->conveniencePointers[0];
-    if(instance->shouldTerminate
-       ||
-       currentMillisecondsSinceEpoch() - getLuaStateStartExecutionTime(L) > instance->executionLimitMilliseconds)
-    {
-        printf("attempting longjump due to crash");
-        longjmp(instance->place, 1);
-    }
-}
-
-
-void SKRNLuaInterpreter::createState() {
-    
-    _state = luaL_newstate();
-    luaL_openlibs(_state);
-    SKRNLuaMTHelper *helper = mtHelperForLuaState(_state);
-    helper->conveniencePointers[0] = (void *)this;
-//    SKRNLuaInterpreter *instance = (SKRNLuaInterpreter *)helper->conveniencePointers[0];
-    // Register class method in Lua https://stackoverflow.com/a/21326241/4469172
-    lua_pushlightuserdata(_state, this);
-    lua_pushcclosure(_state, &SKRNLuaInterpreter::staticLuaPrintHandler, 1);
-    lua_setglobal(_state, "print");
-    lua_pushcfunction(_state, skrn_lua_sleep);
-    lua_setglobal(_state, "sleep");
-    // Add a watcher hook to prevent infinite loops
-    // Inspired by https://stackoverflow.com/a/7083653/4469172
-    lua_sethook(_state, luaState_debug_hook, LUA_MASKCOUNT, 100);
-}
-
-void SKRNLuaInterpreter::closeStateIfNeeded() {
-    callInvoker = nullptr;
-    printf("\nclosing state(deallocating)");
-    if(_state != NULL) {
-        printf("\ndoing lua_close");
-        lua_sethook(_state, NULL, 0, 100);
-        lua_close(_state);
-        _state = NULL;
-        printf("\ndone lua_close");
-    }
-    printf("\ndone all deallocating");
-}
-
-static long long currentMillisecondsSinceEpoch() {
-//    struct timeval tv;
-//    gettimeofday(&tv, NULL);
-//    long long millis = (long long)(tv.tv_sec) * 1000 + (long long)(tv.tv_usec) / 1000;
-//    return millis;
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::system_clock::now().time_since_epoch()
-                                     ).count();
-}
-
-static void setLuaStateStartExecutionTime(lua_State *L) {
-    lua_pushinteger(L, currentMillisecondsSinceEpoch());
-    lua_setglobal(L, "___skrn_start_execution_time");
-}
-static long long getLuaStateStartExecutionTime(lua_State *L) {
-    lua_getglobal(L, "___skrn_start_execution_time");
-    long long sinceStart = lua_tointeger(L, -1);
-    lua_pop(L, 1);
-    return sinceStart;
-}
-
-/**
- * Loads and runs the given string. It is defined as the following macro:
- * (luaL_loadstring(L, str) || lua_pcall(L, 0, LUA_MULTRET, 0)).
- * @returns result code, LUA_OK if ok. (returns 0 if there are no errors or 1 in case of errors)
- */
-int SKRNLuaInterpreter::doString(std::string str) {
-    if(!valid) return 0;
-    setLuaStateStartExecutionTime(_state);
-    int ret = 0;
-    if (setjmp(place) == 0) {
-        ret = luaL_dostring(_state, str.c_str());
-    }
-    else {
-        // Setjmp Fails. Prevent execution from happening since the lua state is now unstable.
-        printf("doString jumped due to failure of execution");
-        valid = false;
-        ret = 999;
-    }
-    return ret;
-}
-int SKRNLuaInterpreter::doFile(std::string str) {
-    if(!valid) return 0;
-    setLuaStateStartExecutionTime(_state);
-    // Nice string prefix checking using stl (https://stackoverflow.com/a/40441240/4469172)
-    if (str.rfind("file:///", 0) == 0) { // pos=0 limits the search to the prefix
-        str = str.substr(7); // Slice out beginning "file://"
-    }
-    int ret = 0;
-    if (setjmp(place) == 0) {
-        ret = luaL_dofile(_state, str.c_str());
-    }
-    else {
-        // Setjmp Fails. Prevent execution from happening since the lua state is now unstable.
-        printf("doFile jumped due to failure of execution");
-        valid = false;
-        ret = 999;
-    }
-    return ret;
-}
-std::string SKRNLuaInterpreter::getLatestError() {
-    return lua_tostring(_state, -1);
-}
-
-jsi::Value SKRNLuaInterpreter::get(jsi::Runtime &runtime, const jsi::PropNameID &name) {
-    std::string methodName = name.utf8(runtime);
-    long long methodSwitch = string_hash(methodName.c_str());
-    switch(methodSwitch) {
-        case "printCount"_sh: {
-            printOutputMutex.lock();
-            int size = (int)printOutput.size();
-            printOutputMutex.unlock();
-            return jsi::Value(size);
-        } break;
-        case "getPrint"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                printOutputMutex.lock();
-                int size = (int)printOutput.size();
-                printOutputMutex.unlock();
-                int numElems;
-                if(count < 1) {
-                    numElems = size;
-                }
-                else {
-                    numElems = (int)arguments[0].asNumber();
-                    if(numElems > size) {
-                        numElems = size;
-                    }
-                }
-//                jsi::Array ret = jsi::Array(runtime, numElems);
-                printOutputMutex.lock();
-                std::vector<std::string> printElems;
-                for(int i = 0; i < numElems; i++) {
-                    printElems.push_back(std::move(printOutput[0]));
-                    printOutput.pop_front();
-                }
-                printOutputMutex.unlock();
-                std::string retStr = StringEZJoin(printElems, "\n");
-                jsi::String ret = jsi::String::createFromUtf8(runtime, retStr);
-                return std::move(ret);
-            });
-        } break;
-        case "dostringasync"_sh: {
-            std::shared_ptr<react::CallInvoker> invoker = callInvoker;
-            if(callInvoker == nullptr) {
-                throw jsi::JSError(runtime, "callinvoker is null");
-            }
-            if(!valid) {
-                throw jsi::JSError(runtime, "Runtime is no longer valid");
-            }
-            if(executing) {
-                throw jsi::JSError(runtime, "Runtime is executing");
-            }
-            return jsi::Function::createFromHostFunction
-            (runtime,name, 1, [&, invoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
-                if(count < 2) {
-                    return jsi::Value::undefined();
-                }
-//                callInvoker->invokeAsync([&]{
-//                    arguments[1].getObject(runtime).asFunction(runtime).call(runtime, 555);
-//                });
-                executing = true;
-                std::string todostring = arguments[0].getString(runtime).utf8(runtime);
-                std::shared_ptr<jsi::Object> userCallbackRef =
-                std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
-                std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
-                std::thread runThread = std::thread([&, this, userCallbackRef, myInvoker, todostring]() {
-                    int ret = doString(todostring);
-                    printf("ret is %d", ret);
-                    executing = false;
-                    if(myInvoker == nullptr) return;
-                    printf("has invoker, about to invoke it");
-                    
-                    // Currently Android crashes right here. It also crashes whenever callInvoker->invokeAsync() is called, even during the module initialization (::install() method). Any help with debugging this would be extremely welcome.
-                    myInvoker->invokeAsync([&, userCallbackRef, ret]{
-                        if(userCallbackRef == nullptr) {
-                            return;
-                        }
-                        printf("calling userCallbackRef since it is not null");
-                        userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
-                    });
-                });
-                runThread.detach();
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "dofileasync"_sh: {
-            std::shared_ptr<react::CallInvoker> invoker = callInvoker;
-            if(callInvoker == nullptr) {
-                throw jsi::JSError(runtime, "callinvoker is null");
-            }
-            if(!valid) {
-                throw jsi::JSError(runtime, "Runtime is no longer valid");
-            }
-            if(executing) {
-                throw jsi::JSError(runtime, "Runtime is executing");
-            }
-            return jsi::Function::createFromHostFunction
-            (runtime,name, 1, [&, invoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
-                if(count < 2) {
-                    return jsi::Value::undefined();
-                }
-                executing = true;
-                std::string todostring = arguments[0].getString(runtime).utf8(runtime);
-                std::shared_ptr<jsi::Object> userCallbackRef =
-                std::make_shared<jsi::Object>(arguments[1].getObject(runtime));
-                std::shared_ptr<react::CallInvoker> myInvoker = callInvoker;
-                std::thread runThread = std::thread([&, userCallbackRef, todostring]() {
-                    int ret = doFile(todostring);
-                    executing = false;
-                    if(myInvoker == nullptr) return;
-                    myInvoker->invokeAsync([&, userCallbackRef, ret]{
-                        printf("ret is %d", ret);
-                        if(userCallbackRef == nullptr) {
-                            return;
-                        }
-                        userCallbackRef->asFunction(runtime).call(runtime, jsi::Value(ret));
-                    });
-                });
-                runThread.detach();
-                return jsi::Value::undefined();
-            });
-
-        } break;
-            // These methods listed from https://www.lua.org/manual/5.4/manual.html#lua_pop
-        case "pop"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                if(count < 1) return jsi::Value::undefined();
-                lua_pop(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "pushboolean"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                lua_pushboolean(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-            // lua_pushcclosure
-            // lua_pushcfunction
-            // lua_pushfstring
-        case "pushglobaltable"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(0, {
-                lua_pushglobaltable(_state);
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "pushinteger"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                if(count < 1) return jsi::Value::undefined();
-                lua_pushinteger(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "pushnil"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(0,{
-                lua_pushnil(_state);
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "pushnumber"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(0,{
-                if(count < 1) return jsi::Value::undefined();
-                lua_pushnumber(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "pushstring"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                if(count < 1) return jsi::Value::undefined();
-                lua_pushstring(_state, arguments[0].asString(runtime).utf8(runtime).c_str());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "pushthread"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                return jsi::Value(lua_pushthread(_state));
-            });
-        } break;
-        case "pushvalue"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                if(count < 1) return jsi::Value::undefined();
-                lua_pushvalue(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "rawequal"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(2,{
-                if(count < 2) return jsi::Value::undefined();
-                return jsi::Value(lua_rawequal(_state, arguments[0].asNumber(), arguments[1].asNumber()));
-            });
-        } break;
-        case "rawget"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                if(count < 1) return jsi::Value::undefined();
-                return jsi::Value(lua_rawget(_state, arguments[0].asNumber()));
-            });
-        } break;
-        case "rawgeti"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(2,{
-                if(count < 2) return jsi::Value::undefined();
-                return jsi::Value(lua_rawgeti(_state, arguments[0].asNumber(), arguments[1].asNumber()));
-            });
-        } break;
-            //rawgetp
-        case "rawlen"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                return jsi::Value((double)lua_rawlen(_state, arguments[0].asNumber()));
-            });
-        } break;
-        case "rawset"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                lua_rawset(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "rawseti"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(2,{
-                if(count < 2) return jsi::Value::undefined();
-                lua_rawseti(_state, arguments[0].asNumber(), arguments[1].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-            // lua_rawsetp
-
-            // skip to lua_remove
-        case "remove"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                lua_remove(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "insert"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                lua_insert(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "replace"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                lua_replace(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "resetthread"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(0,{
-                lua_resetthread(_state);
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "resume"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(2,{
-                if(count < 2) return jsi::Value::undefined();
-                long ptrVal = arguments[0].asNumber();
-                int nargs = arguments[1].asNumber();
-                int nresults = 0;
-                int result = lua_resume(_state, (lua_State *)ptrVal, nargs, &nresults);
-                jsi::Object ret = jsi::Object(runtime);
-                ret.setProperty(runtime, "result", result);
-                ret.setProperty(runtime, "nresults", nresults);
-                return ret;
-            });
-        } break;
-        case "rotate"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(2,{
-                if(count < 2) return jsi::Value::undefined();
-                lua_rotate(_state, arguments[0].asNumber(), arguments[1].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-            //lua_setallocf
-        case "setfield"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(2,{
-                if(count < 2) return jsi::Value::undefined();
-                lua_setfield(_state, arguments[0].asNumber(), arguments[1].asString(runtime).utf8(runtime).c_str());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "setglobal"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                lua_setglobal(_state, arguments[1].asString(runtime).utf8(runtime).c_str());
-                return jsi::Value::undefined();
-            });
-        }break;
-        case "seti"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(2,{
-                if(count < 2) return jsi::Value::undefined();
-                lua_seti(_state, arguments[0].asNumber(), arguments[1].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "setiuservalue"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(2,{
-                if(count < 2) return jsi::Value::undefined();
-                return jsi::Value(lua_setiuservalue(_state, arguments[0].asNumber(), arguments[1].asNumber()));
-            });
-        } break;
-        case "setmetatable"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                return jsi::Value(lua_setmetatable(_state, arguments[0].asNumber()));
-            });
-        } break;
-        case "settable"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                lua_settable(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "settop"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                lua_settop(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "gettop"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(0, {
-                return jsi::Value(lua_gettop(_state));
-            });
-        } break;
-            //lua_setwarnf
-        case "status"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(0,{
-                return jsi::Value(lua_status(_state));
-            });
-        } break;
-        case "stringtonumber"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                size_t ret = lua_stringtonumber(_state, arguments[0].asString(runtime).utf8(runtime).c_str());
-                return jsi::Value((int)(ret));
-            });
-        } break;
-        case "gettable"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                if(count < 1) return jsi::Value::undefined();
-                return jsi::Value(lua_gettable(_state, arguments[0].asNumber()));
-            });
-        } break;
-
-        case "dostring"_sh: {
-            if(!valid) {
-                throw jsi::JSError(runtime, "Runtime is no longer valid");
-            }
-            if(executing) {
-                throw jsi::JSError(runtime, "Runtime is executing");
-            }
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                if(count < 1) return jsi::Value::undefined();
-                std::string str = arguments[0].asString(runtime).utf8(runtime);
-                int retVal = doString(str);
-                executing = false;
-                if(retVal == 999) {
-                    throw jsi::JSError(runtime, "Execution over limit");
-                }
-                return jsi::Value(retVal);
-            });
-        } break;
-        case "dofile"_sh: {
-            if(!valid) {
-                throw jsi::JSError(runtime, "Runtime is no longer valid");
-            }
-            if(executing) {
-                throw jsi::JSError(runtime, "Runtime is executing");
-            }
-            return EZ_JSI_HOST_FN_TEMPLATE(1,{
-                if(count < 1) return jsi::Value::undefined();
-                std::string str = arguments[0].asString(runtime).utf8(runtime);
-                int retVal = doFile(str);
-                executing = false;
-                if(retVal == 999) {
-                    throw jsi::JSError(runtime, "Execution over limit");
-                }
-                return jsi::Value(retVal);
-            });
-        } break;
-        case "getglobal"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                std::string str = arguments[0].asString(runtime).utf8(runtime);
-                lua_getglobal(_state, str.c_str());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "getLatestError"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(0, {
-                return jsi::String::createFromUtf8(runtime, getLatestError());
-            });
-        } break;
-        case "var_asnumber"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                std::string str = arguments[0].asString(runtime).utf8(runtime);
-                lua_getglobal(_state, str.c_str());
-                if(lua_isnumber(_state, -1)) {
-                    //        lua_Number num = lua_tonumberx(_state, -1, NULL);
-                    lua_Number num = lua_tonumber(_state, -1);
-                    return jsi::Value(num);
-                }
-                return jsi::Value(0);
-            });
-        } break;
-        case "toboolean"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                return jsi::Value(lua_toboolean(_state, arguments[0].asNumber()));
-            });
-        } break;
-            // tocfunction
-        case "toclose"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                lua_toclose(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-        case "tointeger"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                return jsi::Value((int)lua_tointeger(_state, arguments[0].asNumber()));
-            });
-        } break;
-        case "tonumber"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                return jsi::Value(lua_tonumber(_state, arguments[0].asNumber()));
-            });
-        } break;
-        case "tostring"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                lua_tostring(_state, arguments[0].asNumber());
-                return jsi::Value::undefined();
-            });
-        } break;
-            //        case "topointer"_sh: {
-            //
-            //        } break;
-        case "tothread"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                lua_State *thread = lua_tothread(_state, arguments[0].asNumber());
-                return jsi::Value((double)(long)(thread));
-            });
-        } break;
-        case "type"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                int idx = count < 1 ? -1 : arguments[0].asNumber();
-                return jsi::Value(lua_type(_state, idx));
-            });
-        } break;
-        case "typename"_sh: {
-            return EZ_JSI_HOST_FN_TEMPLATE(1, {
-                if(count < 1) return jsi::Value::undefined();
-                return jsi::String::createFromUtf8(runtime, lua_typename(_state, arguments[0].asNumber()));
-            });
-        } break;
-
-            // skip to lua_yield
-        case "yield"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                return jsi::Value(lua_yield(_state, arguments[0].asNumber()));
-            });
-        } break;
-
-        case "valid"_sh: {
-            return jsi::Value(valid);
-        } break;
-
-        case "executionLimit"_sh: {
-            return jsi::Value((double)executionLimitMilliseconds);
-        } break;
-        case "setExecutionLimit"_sh: {
-            return EZ_LUA_MANDATORY_SINGLE_ARGUMENT_TEMPLATE({
-                executionLimitMilliseconds = arguments[0].asNumber();
-                if(executionLimitMilliseconds < 0) {
-                    executionLimitMilliseconds = 10000;
-                }
-                return jsi::Value::undefined();
-            });
-        } break;
-
-            //        case "size"_sh: {
-            //            return ObjectFromSKRNSize(runtime, size());
-            //        } break;
-    }
-    return jsi::Value::undefined();
-}
-
-static std::vector<std::string> nativeLuaInterpreterKeys = {
-    "pop",
-    "pushboolean",
-    "pushglobaltable",
-    "pushinteger",
-    "pushnil",
-    "pushnumber",
-    "pushstring",
-    "pushthread",
-    "pushvalue",
-    "rawequal",
-    "rawget",
-    "rawgeti",
-    "rawlen",
-    "rawset",
-    "rawseti",
-    "remove",
-    "insert",
-    "replace",
-    "resetthread",
-    "resume",
-    "rotate",
-    "setfield",
-    "setglobal",
-    "seti",
-    "setiuservalue",
-    "setmetatable",
-    "settable",
-    "settop",
-    "gettop",
-    "status",
-    "stringtonumber",
-    "gettable",
-    "dostring",
-    "dofile",
-    "getglobal",
-    "getLatestError",
-    "var_asnumber",
-    "toboolean",
-    "toclose",
-    "tointeger",
-    "tonumber",
-    "tostring",
-    "topointer",
-    "tothread",
-    "type",
-    "typename",
-    "yield",
-    "valid"
-};
-std::vector<jsi::PropNameID> SKRNLuaInterpreter::getPropertyNames(jsi::Runtime& rt) {
-    std::vector<jsi::PropNameID> ret;
-    for(std::string key : nativeLuaInterpreterKeys) {
-        ret.push_back(jsi::PropNameID::forUtf8(rt, key));
-    }
-    return ret;
-}
-}
-#define LUAMTHELPERKEY "__SKRNMTHelper"
-void SKRNLuaMultitheadUserStateOpen(lua_State *L) {
-    // Lua EXTRADATA http://lua-users.org/lists/lua-l/2013-09/msg00005.html
-    // But it's no longer the same in Lua 5.4 apparently;
-    // We how have helpful macros like lua_getextraspace !
-    void **extraSpace = (void **)lua_getextraspace(L);
-    SKRNNativeLua::SKRNLuaMTHelper *helper = new SKRNNativeLua::SKRNLuaMTHelper();
-//    ((char *)(L) - LUA_EXTRASPACE);
-    *extraSpace = (void *)helper;
-}
-void SKRNLuaMultitheadUserStateClose(lua_State *L) {
-    printf("userstateclose");
-    clearMTHelperForLuaState(L);
-}
-void SKRNLuaMultitheadLuaLock(lua_State *L) {
-    SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
-    helper->mutex.lock();
-}
-void SKRNLuaMultitheadLuaUnlock(lua_State *L) {
-    SKRNNativeLua::SKRNLuaMTHelper *helper = mtHelperForLuaState(L);
-    helper->mutex.unlock();
-}
-SKRNNativeLua::SKRNLuaMTHelper *mtHelperForLuaState(lua_State *L) {
-    void **extraspacePointer = (void **)lua_getextraspace(L);
-    SKRNNativeLua::SKRNLuaMTHelper *helper = (SKRNNativeLua::SKRNLuaMTHelper *)(*extraspacePointer);
-    return helper;
-}
-void clearMTHelperForLuaState(lua_State *L) {
-    void **extraspacePointer = (void **)lua_getextraspace(L);
-    if(*extraspacePointer != NULL) {
-        printf("nonnulextraspace");
-        SKRNNativeLua::SKRNLuaMTHelper *helper = (SKRNNativeLua::SKRNLuaMTHelper *)(*extraspacePointer);
-        delete helper;
-        printf("deleted helper");
-        *extraspacePointer = NULL;
-    }
-}
+} // namespace SKRNNativeLua

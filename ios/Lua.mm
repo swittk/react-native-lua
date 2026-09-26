@@ -1,73 +1,89 @@
 #import "Lua.h"
+
 #import "react-native-lua.h"
 #import <React/RCTUtils.h>
+
+#ifdef RCT_NEW_ARCH_ENABLED
+#import <ReactCommon/RCTTurboModule.h>
+#else
 #import <React/RCTBridge+Private.h>
-#import <jsi/jsi.h>
-#import <ReactCommon/CallInvoker.h>
-#import <ReactCommon/RCTTurboModuleManager.h>
+#endif
+
+using namespace facebook;
 
 @implementation SKNativeLua
-@synthesize bridge = _bridge;
 
 RCT_EXPORT_MODULE()
 
-// Example method for C++
-// See the implementation of the example module in the `cpp` folder
-RCT_EXPORT_METHOD(multiply:(nonnull NSNumber*)a withB:(nonnull NSNumber*)b
-                  withResolver:(RCTPromiseResolveBlock)resolve
-                  withReject:(RCTPromiseRejectBlock)reject)
++ (BOOL)requiresMainQueueSetup
 {
-    NSNumber *result = @(SKRNNativeLua::multiply([a floatValue], [b floatValue]));
-
-    resolve(result);
+  // Legacy installation reads the bridge runtime and must run with bridge setup.
+  return YES;
 }
 
-+ (BOOL)requiresMainQueueSetup {
-    return YES;
+RCT_EXPORT_METHOD(multiply:(double)a
+                  b:(double)b
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+  resolve(@(SKRNNativeLua::multiply(a, b)));
 }
 
+#ifdef RCT_NEW_ARCH_ENABLED
 
-
-- (void)setBridge:(RCTBridge *)bridge {
-    _bridge = bridge;
-    _setBridgeOnMainQueue = RCTIsMainQueue();
-    [self installLibrary];
+/** Supplies the generated TurboModule implementation for RN's module registry. */
+- (std::shared_ptr<react::TurboModule>)getTurboModule:
+    (const react::ObjCTurboModule::InitParams &)params
+{
+  return std::make_shared<react::NativeLuaSpecJSI>(params);
 }
 
--(void)installLibrary {
-//    self.bridge.reactInstance;
-    RCTCxxBridge *cxxBridge = (RCTCxxBridge *)self.bridge;
-    if (!cxxBridge.runtime) {
-        
-        /**
-         * This is a workaround to install library
-         * as soon as runtime becomes available and is
-         * not recommended. If you see random crashes in iOS
-         * global.xxx not found etc. use this.
-         */
-        
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.001 * NSEC_PER_SEC),
-                       dispatch_get_main_queue(), ^{
-            /**
-             When refreshing the app while debugging, the setBridge
-             method is called too soon. The runtime is not ready yet
-             quite often. We need to install library as soon as runtime
-             becomes available.
-             */
-            [self installLibrary];
-            
+/** Installs the shared HostObject factory through the supported New Architecture hook. */
+- (void)installJSIBindingsWithRuntime:(jsi::Runtime &)runtime
+                          callInvoker:(const std::shared_ptr<react::CallInvoker> &)callInvoker
+{
+  SKRNNativeLua::install(runtime, callInvoker);
+}
+
+#else
+
+@synthesize bridge = _bridge;
+
+/** Installs the same HostObject factory through the RN 0.73 legacy bridge. */
+- (void)setBridge:(RCTBridge *)bridge
+{
+  _bridge = bridge;
+  [self installLegacyBindingsWhenReady];
+}
+
+/** Waits for RCTCxxBridge to publish its JSI runtime during bridge startup/reload. */
+- (void)installLegacyBindingsWhenReady
+{
+  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)self.bridge;
+  if (cxxBridge.runtime == nullptr) {
+    __weak SKNativeLua *weakSelf = self;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_MSEC)),
+        dispatch_get_main_queue(), ^{
+          [weakSelf installLegacyBindingsWhenReady];
         });
-        return;
-    }
-    facebook::jsi::Runtime *runtime = (facebook::jsi::Runtime *)cxxBridge.runtime;
-    SKRNNativeLua::install(*runtime, cxxBridge.jsCallInvoker);
+    return;
+  }
+
+  auto *runtime = reinterpret_cast<jsi::Runtime *>(cxxBridge.runtime);
+  SKRNNativeLua::install(*runtime, nullptr);
 }
 
-- (void)invalidate {
-    RCTCxxBridge *cxxBridge = (RCTCxxBridge *)self.bridge;
-    facebook::jsi::Runtime *runtime = (facebook::jsi::Runtime *)cxxBridge.runtime;
+/** Removes the legacy runtime global before the bridge tears down. */
+- (void)invalidate
+{
+  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)self.bridge;
+  if (cxxBridge.runtime != nullptr) {
+    auto *runtime = reinterpret_cast<jsi::Runtime *>(cxxBridge.runtime);
     SKRNNativeLua::cleanup(*runtime);
+  }
 }
 
+#endif
 
 @end

@@ -1,94 +1,145 @@
 # react-native-lua
 
-Native Lua in React Native
-Heavily based on React Native JSI 😅.
-Working in both iOS and Android.
+An embedded Lua 5.4.9 runtime with LuaSocket for React Native 0.73.6 and newer.
+The same package supports the RN 0.73 legacy architecture and RN 0.83's New
+Architecture TurboModule/JSI installation path.
 
-Lots of inspiration from [ObjC-Lua](https://github.com/PedestrianSean/ObjC-Lua) and [ilua](https://github.com/profburke/ilua).
-
-The Lua source version (as of February 2022) is `5.4.4`.
-- Minimally modified, simply prevented MakeFile from being detected and commented out `os_execute` from `loslib.c` to prevent calls to `system(cmd)` from occuring (unavailable on iOS).
+The public interpreter is a JSI HostObject in both architectures. Only the
+native binding installation changes; interpreter creation, Lua, LuaSocket, and
+the resource controls are shared.
 
 ## Installation
 
 ```sh
-npm install react-native-lua
+pnpm add react-native-lua
 ```
 
-#### iOS
-```
-cd ios && pod install
-```
-#### Android
-You need NDK installed. That's it.
+Run `pod install` for iOS and rebuild the native app. Expo apps require a
+development/native build; Expo Go cannot load custom native code. Supported
+hosts are React Native >= 0.73.6, and the pod's iOS deployment floor is 13.4.
 
 ## Usage
 
-Methods can be seen in the types.
+```ts
+import {luaInterpreter, LUA_ERROR_CODE} from 'react-native-lua';
 
-Almost all methods are simply the same as known C api methods of the pattern `lua_${methodName}`, sans the `lua_` prefix.
+const lua = luaInterpreter({
+  executionLimitMs: 2_000,
+  memoryLimitBytes: 8 * 1024 * 1024,
+  maxOutputBytes: 16 * 1024,
+  maxOutputLines: 256,
+  allowNetwork: true,
+});
 
-```js
-import { luaInterpreter } from "react-native-lua";
-// Create a new interpreter
-const interp = luaInterpreter();
-// this is equivalent to lua_dostring
-interp.dostring(`a = 2
-b = a ^ 2
-a = b * 20
-    `);
-// Or asynchronously! Each Lua Interpreter spawns its own thread when executing async code, so this doesn't block any other processes.
-interp.dostringasync(`i = 0
-while(i < 8)
-do
-  print(i)
-  sleep(100)
-  i = i + 1
-end`)
+const status = lua.dostring(`
+  local socket = require('socket')
+  print(_VERSION, socket._VERSION)
+`);
 
-// The rest is up to you!
+if (status === 0) {
+  console.log(lua.getPrint());
+} else if (status === LUA_ERROR_CODE.LUA_DEADLINE_EXCEEDED) {
+  console.warn('script exceeded its deadline');
+} else {
+  console.warn(lua.getLatestError());
+}
 ```
 
-#### The interpreter in action
-![the-interpreter-in-action](/docs/images/example-coroutine-async-demonstration.gif)
+`dostringasync` and `dofileasync` retain their callback signatures. Lua runs on
+one owned native worker per interpreter, while JavaScript polls plain native
+result data. No JSI callback or runtime pointer crosses the worker boundary.
+New code can use `executeStringAsync` / `executeFileAsync` for a structured
+Promise result. Call `cancel()` to stop active work or `destroy()` to cancel,
+join, and close deterministically.
 
-## Execution limits
+The HostObject also retains low-level Lua stack operations for advanced native
+and JavaScript callers (`push*`, `getglobal`, `settable`, `type`, and related
+methods).
 
-Since Lua is a scripting language, it wouldn't be nice if our code suddenly got stuck in a forever loop and blocks the whole program.
+## LuaSocket and raw networking
 
-This library handles this condition by leveraging Lua runtime's `lua_sethook` function (which allows us to monitor the code execution every N commands).
+LuaSocket is compiled into every platform binary and enabled by default. These
+in-memory modules are available:
 
-The property `executionLimit` defines the number of milliseconds the script should run until it is terminated. Default value is 10000 (10 seconds). You can set this value by calling `setExecutionLimit(ms)`
+- `socket`, `socket.core`, `socket.http`, `socket.ftp`, `socket.smtp`,
+  `socket.url`, `socket.headers`, and `socket.tp`;
+- `mime`, `mime.core`, `ltn12`, and `mbox`;
+- TCP, UDP, `socket.select`, and Unix stream/datagram sockets.
 
-## Future plans
-- Make async `dostringasync` and `dofileasync` work on Android
-    - iOS `dostringasync` is working perfectly well, however, in Android it is only possible to use `dostring` since CallInvoker crashes immediately when InvokeAsync() is called. Any help in getting this working would be very much appreciated.
+This is intentional raw socket access, not a wrapper around React Native's
+networking API. A script can connect, listen, send UDP datagrams, or access a
+Unix socket with the host app's OS privileges. No TLS implementation is
+bundled, so `socket.http` handles plain HTTP; HTTPS requires a separately
+provided LuaSec-compatible module.
 
+Set `allowNetwork: false` when creating an interpreter to omit LuaSocket and
+its private `require` loader. A higher-level policy layer should use that
+option and expose separately approved network actions rather than run untrusted
+scripts with generic sockets.
 
-## Contributing
+When networking is enabled, `require` can resolve only compiled-in/preloaded
+modules. The global `package` table stays hidden, and filesystem and native
+dynamic module searchers are removed. Socket waits and `socket.sleep` are
+sliced so cancellation remains prompt and the interpreter deadline is
+enforced. OS DNS resolution is synchronous and cannot be preempted portably;
+the deadline/cancellation result is raised immediately after the resolver
+returns. Large UDP/Unix-datagram receive buffers use Lua's capped allocator.
 
-See the [contributing guide](CONTRIBUTING.md) to learn how to contribute to the repository and the development workflow.
+## Security and resource boundaries
+
+New interpreters expose Lua's base, coroutine, table, string, math, and UTF-8
+libraries. `io`, `os`, `package`, and `debug` are not ambient globals.
+`dofile` is denied unless `allowFileSystem` is true, and bytecode is rejected
+unless `allowBytecode` is true.
+
+The bundled Lua source removes `os.execute` and the other process/environment/
+filesystem-mutating OS functions. They remain absent even if a native
+integrator explicitly opens the reduced OS library.
+
+Each interpreter has:
+
+- a monotonic execution deadline checked by a Lua instruction hook and socket
+  wait integration;
+- a capped Lua allocator (32 MiB by default, 512 KiB minimum);
+- bounded captured output (64 KiB and 1,000 lines by default);
+- explicit cancellation and destruction;
+- text-only loading by default.
+
+Run the native security, resource, and loopback networking suite with:
+
+```sh
+pnpm test:native
+```
+
+## Curated capability injection
+
+The generic engine intentionally contains no application-specific command
+namespace. A higher-level native adapter can construct `SKRNLuaInterpreter`,
+set `allowNetwork: false`, and call `withState(...)` before exposure to install
+only explicitly granted Lua C functions/tables.
+
+Keep policy, permission prompts, command schemas, and host-action dispatch in
+that adapter. Do not expose arbitrary `NativeModules`, process APIs, dynamic
+loaders, or raw filesystem/network access to untrusted scripts.
+
+## RN 0.73.6 old-architecture example
+
+`example/` is a real RN 0.73.6 app with `newArchEnabled=false`. It autolinks
+this checkout, creates the actual HostObject, loads LuaSocket helpers, runs Lua
+coroutines, and verifies that unsafe ambient libraries remain unavailable.
+
+The example has its own RN 0.73 dependency tree, so it can use the owner's
+working Monterey/Node toolchain independently of the repository's RN 0.83
+development dependency:
+
+```sh
+pnpm install
+pnpm pods
+pnpm example:ios
+# or: pnpm example:android
+```
 
 ## License
 
-MIT
-
-
----
-##### Tip Jar
-
-If you appreciate my work, help buy me some soda 🥤 via the following routes.
-
-<img src="https://upload.wikimedia.org/wikipedia/commons/5/56/Stellar_Symbol.png" alt="Stellar" height="32"/>
-
-```
-Stellar Lumens (XLM) : 
-GCVKPZQUDXWVNPIIMF3FXR6KWAOHTEWPZZM2AQE4J3TXR6ZDHXQHP5BQ
-```
-
-<img src="https://upload.wikimedia.org/wikipedia/commons/1/19/Coin-ada-big.svg" alt="Cardano" height="32">
-
-```
-Cardano (ADA) : 
-addr1q9datt8urnyuc2059tquh59sva0pja7jqg4nfhnje7xcy6zpndeesglqkxhjvcgdu820flcecjzunwp6qen4yr92gm6smssug8
-```
+MIT. The bundled LuaSocket sources are also MIT licensed and retain their
+upstream copyright notices.

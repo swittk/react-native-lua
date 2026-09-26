@@ -1,40 +1,34 @@
+const fs = require('fs');
 const path = require('path');
-const blacklist = require('metro-config/src/defaults/exclusionList');
-const escape = require('escape-string-regexp');
-const pak = require('../package.json');
+const {getDefaultConfig, mergeConfig} = require('@react-native/metro-config');
 
-const root = path.resolve(__dirname, '..');
+const projectRoot = __dirname;
+const workspaceRoot = path.resolve(projectRoot, '..');
+const exampleNodeModules = path.join(projectRoot, 'node_modules');
 
-const modules = Object.keys({
-  ...pak.peerDependencies,
-});
+function forceExampleRuntime(context, moduleName, platform) {
+  if (
+    moduleName === 'react' ||
+    moduleName.startsWith('react/') ||
+    moduleName === 'react-native' ||
+    moduleName.startsWith('react-native/')
+  ) {
+    const filePath = require.resolve(moduleName, {paths: [exampleNodeModules]});
+    return {type: 'sourceFile', filePath: fs.realpathSync(filePath)};
+  }
+  return context.resolveRequest(context, moduleName, platform);
+}
 
-module.exports = {
-  projectRoot: __dirname,
-  watchFolders: [root],
-
-  // We need to make sure that only one version is loaded for peerDependencies
-  // So we blacklist them at the root, and alias them to the versions in example's node_modules
+const config = {
+  watchFolders: [workspaceRoot],
   resolver: {
-    blacklistRE: blacklist(
-      modules.map(
-        (m) =>
-          new RegExp(`^${escape(path.join(root, 'node_modules', m))}\\/.*$`)
-      )
-    ),
-
-    extraNodeModules: modules.reduce((acc, name) => {
-      acc[name] = path.join(__dirname, 'node_modules', name);
-      return acc;
-    }, {}),
-  },
-
-  transformer: {
-    getTransformOptions: async () => ({
-      transform: {
-        experimentalImportSupport: false,
-        inlineRequires: true,
-      },
-    }),
+    unstable_enableSymlinks: true,
+    nodeModulesPaths: [exampleNodeModules],
+    resolveRequest: forceExampleRuntime,
+    extraNodeModules: {
+      'react-native-lua': workspaceRoot,
+    },
   },
 };
+
+module.exports = mergeConfig(getDefaultConfig(projectRoot), config);
