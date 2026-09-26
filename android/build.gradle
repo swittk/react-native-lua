@@ -1,164 +1,145 @@
+import groovy.json.JsonSlurper
 import java.nio.file.Paths
 
-static def findNodeModules(baseDir) {
-  def basePath = baseDir.toPath().normalize()
-  // Node's module resolution algorithm searches up to the root directory,
-  // after which the base path will be null
-  while (basePath) {
-    def nodeModulesPath = Paths.get(basePath.toString(), "node_modules")
-    def reactNativePath = Paths.get(nodeModulesPath.toString(), "react-native")
-    if (nodeModulesPath.toFile().exists() && reactNativePath.toFile().exists()) {
-      return nodeModulesPath.toString()
-    }
-    basePath = basePath.getParent()
-  }
-  throw new GradleException("ReactNativeNativeVideo: Failed to find node_modules/ path!")
-}
-
-def nodeModules = findNodeModules(projectDir)
-def reactProperties = new Properties()
-file("$nodeModules/react-native/ReactAndroid/gradle.properties").withInputStream { reactProperties.load(it) }
-def REACT_NATIVE_VERSION = reactProperties.getProperty("VERSION_NAME").split("\\.")[1].toInteger()
-
 buildscript {
-    if (project == rootProject) {
-        repositories {
-            google()
-            mavenCentral()
-            jcenter()
-        }
-
-        dependencies {
-            classpath 'com.android.tools.build:gradle:4.2.0'
-        }
+  if (project == rootProject) {
+    repositories {
+      google()
+      mavenCentral()
+      jcenter()
     }
+    dependencies {
+      classpath "com.android.tools.build:gradle:4.2.0"
+    }
+  }
 }
 
-apply plugin: 'com.android.library'
+apply plugin: "com.android.library"
 
-def safeExtGet(prop, fallback) {
-    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+static def findNodeModules(File projectDirectory, File rootDirectory) {
+  def configured = System.getenv("REACT_NATIVE_NODE_MODULES_DIR")
+  if (configured != null && new File(configured, "react-native/package.json").exists()) {
+    return new File(configured).canonicalPath
+  }
+  // Prefer the consuming app. Local file: installs can otherwise discover a
+  // development-only RN version nested inside the copied package checkout.
+  def starts = [rootDirectory.toPath().normalize(), projectDirectory.toPath().normalize()]
+  for (def start : starts) {
+    def current = start
+    while (current != null) {
+      def candidate = Paths.get(current.toString(), "node_modules")
+      if (candidate.resolve("react-native/package.json").toFile().exists()) {
+        return candidate.toString()
+      }
+      current = current.getParent()
+    }
+  }
+  throw new GradleException("react-native-lua: unable to locate react-native in node_modules")
 }
-def getExtOrDefaultValue(name, defaultValue) {
-  return rootProject.ext.has(name) ? rootProject.ext.get(name) : defaultValue
+
+def nodeModules = findNodeModules(projectDir, rootProject.projectDir)
+def reactNativePackage = new JsonSlurper().parse(file("${nodeModules}/react-native/package.json"))
+def reactNativeMinorVersion = reactNativePackage.version.tokenize('.')[1].toInteger()
+if (reactNativeMinorVersion < 73) {
+  throw new GradleException("react-native-lua requires React Native 0.73.6 or newer")
+}
+def newArchitectureEnabled =
+    project.hasProperty("newArchEnabled") && project.property("newArchEnabled") == "true"
+def reactNativeArchitectures = project.findProperty("reactNativeArchitectures")
+
+apply plugin: "com.facebook.react"
+react {
+  libraryName = "NativeLuaSpec"
+  jsRootDir = file("..")
+  reactNativeDir = file("${nodeModules}/react-native")
+  codegenDir = file("${nodeModules}/@react-native/codegen")
+  codegenJavaPackageName = "com.reactnativelua"
+}
+
+def safeExtGet(String name, Object fallback) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback
 }
 
 android {
-  configurations {
-    extractHeaders
-    extractJNI
-  }
-  compileSdkVersion safeExtGet('Lua_compileSdkVersion', 29)
-    ndkVersion getExtOrDefaultValue('ndkVersion', '21.4.7075529')
-    defaultConfig {
-        minSdkVersion safeExtGet('Lua_minSdkVersion', 16)
-        targetSdkVersion safeExtGet('Lua_targetSdkVersion', 29)
-        versionCode 1
-        versionName "1.0"
+  namespace "com.reactnativelua"
 
-        externalNativeBuild {
-            cmake {
-                cppFlags "-O2 -frtti -fexceptions -Wall -fstack-protector-all"
-                abiFilters 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
-              arguments "-DNODE_MODULES_DIR=${nodeModules.toString()}",
-                // This is how the REACT_NATIVE_VERSION magic variable appears in our CMAKELISTS file
-                "-DREACT_NATIVE_VERSION=${REACT_NATIVE_VERSION}",
-                // Needed to add this otherwise the fbjni header won't be found
-                // https://github.com/facebookincubator/fbjni/issues/50#issuecomment-788869153
-                 '-DANDROID_STL=c++_shared'
-            }
-        }
+  compileSdkVersion safeExtGet(
+      "Lua_compileSdkVersion", safeExtGet("compileSdkVersion", reactNativeMinorVersion >= 80 ? 35 : 34))
+  ndkVersion safeExtGet(
+      "Lua_ndkVersion", safeExtGet("ndkVersion", reactNativeMinorVersion >= 80 ? "27.1.12297006" : "25.1.8937393"))
 
-    }
+  defaultConfig {
+    minSdkVersion safeExtGet("Lua_minSdkVersion", safeExtGet("minSdkVersion", 21))
+    targetSdkVersion safeExtGet(
+        "Lua_targetSdkVersion", safeExtGet("targetSdkVersion", reactNativeMinorVersion >= 80 ? 35 : 34))
+    buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", newArchitectureEnabled.toString()
 
     externalNativeBuild {
-        cmake {
-            path "CMakeLists.txt"
+      cmake {
+        cppFlags "-O2 -frtti -fexceptions -Wall -fstack-protector-all"
+        arguments "-DNODE_MODULES_DIR=${nodeModules}",
+            "-DREACT_NATIVE_MINOR_VERSION=${reactNativeMinorVersion}",
+            "-DRNLUA_NEW_ARCH_ENABLED=${newArchitectureEnabled}",
+            "-DANDROID_STL=c++_shared"
+        if (reactNativeArchitectures != null) {
+          abiFilters(*reactNativeArchitectures.split(","))
+        } else {
+          abiFilters "x86", "x86_64", "armeabi-v7a", "arm64-v8a"
         }
+      }
     }
+  }
 
-    buildTypes {
-        release {
-            minifyEnabled false
-        }
+  sourceSets {
+    main {
+      java.srcDir(newArchitectureEnabled ? "src/newarch/java" : "src/oldarch/java")
     }
-    lintOptions {
-        disable 'GradleCompatible'
-    }
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
-  dependencies {
-//    implementation 'com.facebook.fbjni:fbjni:+'
-    // If headers are required.
-    extractHeaders 'com.facebook.fbjni:fbjni:+:headers'
-    // If the `.so` files are required for linking.
-    extractJNI 'com.facebook.fbjni:fbjni:+'
   }
-  // Doing this following https://github.com/facebookincubator/fbjni/issues/50#issuecomment-788869153
-  // Final change that made this finally able to run on device (though still crashes due to sth else)
+
+  externalNativeBuild {
+    cmake {
+      path "CMakeLists.txt"
+    }
+  }
+
+  buildFeatures {
+    buildConfig = true
+    prefab = true
+  }
+
+  // These are link-time Prefab dependencies supplied by the consuming RN app;
+  // only libSKRNNativeLua.so belongs in this library's AAR.
   packagingOptions {
-    exclude("**/libfbjni.so")
-    exclude("**/libc++_shared.so")
-//    exclude 'lib/arm64-v8a/libfbjni.so'
+    exclude "**/libc++_shared.so"
+    exclude "**/libfbjni.so"
+    exclude "**/libjsi.so"
+    exclude "**/libreactnative.so"
+    exclude "**/libreactnativejni.so"
   }
-  configurations {
-    all*.exclude module: 'fbjni-java-only'
+
+  buildTypes {
+    release {
+      minifyEnabled false
+    }
+  }
+
+  lintOptions {
+    disable "GradleCompatible"
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
   }
 }
 
 repositories {
-    mavenLocal()
-    maven {
-        // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
-        url("$rootDir/../node_modules/react-native/android")
-    }
-    maven {
-      url("$rootDir/../node_modules/react-native")
-    }
-    google()
-    mavenCentral()
-    jcenter()
+  mavenLocal()
+  google()
+  mavenCentral()
 }
 
 dependencies {
-    //noinspection GradleDynamicVersion
-  implementation("com.facebook.react:react-native:+") {
-        exclude group: 'com.facebook.fbjni', module: 'fbjni-java-only'
-}
-//    implementation 'com.facebook.fbjni:fbjni:0.2.2'
-}
-
-task extractAARHeaders {
-  doLast {
-    configurations.extractHeaders.files.each {
-      def file = it.absoluteFile
-      copy {
-        from zipTree(file)
-        into "$buildDir/$file.name"
-        include "**/*.h"
-      }
-    }
-  }
-}
-
-task extractJNIFiles {
-  doLast {
-    configurations.extractJNI.files.each {
-      def file = it.absoluteFile
-      copy {
-        from zipTree(file)
-        into "$buildDir/$file.name"
-        include "jni/**/*"
-      }
-    }
-  }
-}
-
-tasks.whenTaskAdded { task ->
-  if (task.name.contains('externalNativeBuild')) {
-    task.dependsOn(extractAARHeaders)
-    task.dependsOn(extractJNIFiles)
-  }
+  implementation "com.facebook.react:react-android"
+  implementation "com.facebook.fbjni:fbjni:${safeExtGet('fbjniVersion', reactNativeMinorVersion >= 76 ? '0.7.0' : '0.5.1')}"
 }

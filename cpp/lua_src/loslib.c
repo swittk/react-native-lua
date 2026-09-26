@@ -10,9 +10,6 @@
 #include "lprefix.h"
 
 
-#include <errno.h>
-#include <locale.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -30,23 +27,14 @@
 */
 #if !defined(LUA_STRFTIMEOPTIONS)	/* { */
 
-/* options for ANSI C 89 (only 1-char options) */
-#define L_STRFTIMEC89		"aAbBcdHIjmMpSUwWxXyYZ%"
-
-/* options for ISO C 99 and POSIX */
-#define L_STRFTIMEC99 "aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%" \
-    "||" "EcECExEXEyEY" "OdOeOHOIOmOMOSOuOUOVOwOWOy"  /* two-char options */
-
-/* options for Windows */
-#define L_STRFTIMEWIN "aAbBcdHIjmMpSUwWxXyYzZ%" \
-    "||" "#c#x#d#H#I#j#m#M#S#U#w#W#y#Y"  /* two-char options */
-
 #if defined(LUA_USE_WINDOWS)
-#define LUA_STRFTIMEOPTIONS	L_STRFTIMEWIN
-#elif defined(LUA_USE_C89)
-#define LUA_STRFTIMEOPTIONS	L_STRFTIMEC89
+#define LUA_STRFTIMEOPTIONS  "aAbBcdHIjmMpSUwWxXyYzZ%" \
+    "||" "#c#x#d#H#I#j#m#M#S#U#w#W#y#Y"  /* two-char options */
+#elif defined(LUA_USE_C89)  /* ANSI C 89 (only 1-char options) */
+#define LUA_STRFTIMEOPTIONS  "aAbBcdHIjmMpSUwWxXyYZ%"
 #else  /* C99 specification */
-#define LUA_STRFTIMEOPTIONS	L_STRFTIMEC99
+#define LUA_STRFTIMEOPTIONS  "aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%" \
+    "||" "EcECExEXEyEY" "OdOeOHOIOmOMOSOuOUOVOwOWOy"  /* two-char options */
 #endif
 
 #endif					/* } */
@@ -102,85 +90,10 @@
 
 
 /*
-** {==================================================================
-** Configuration for 'tmpnam':
-** By default, Lua uses tmpnam except when POSIX is available, where
-** it uses mkstemp.
-** ===================================================================
+** react-native-lua deliberately does not compile an os.execute binding.
+** Mobile scripts must receive narrowly scoped native capabilities from their
+** host instead of inheriting ambient shell access from the process.
 */
-#if !defined(lua_tmpnam)	/* { */
-
-#if defined(LUA_USE_POSIX)	/* { */
-
-#include <unistd.h>
-
-#define LUA_TMPNAMBUFSIZE	32
-
-#if !defined(LUA_TMPNAMTEMPLATE)
-#define LUA_TMPNAMTEMPLATE	"/tmp/lua_XXXXXX"
-#endif
-
-#define lua_tmpnam(b,e) { \
-        strcpy(b, LUA_TMPNAMTEMPLATE); \
-        e = mkstemp(b); \
-        if (e != -1) close(e); \
-        e = (e == -1); }
-
-#else				/* }{ */
-
-/* ISO C definitions */
-#define LUA_TMPNAMBUFSIZE	L_tmpnam
-#define lua_tmpnam(b,e)		{ e = (tmpnam(b) == NULL); }
-
-#endif				/* } */
-
-#endif				/* } */
-/* }================================================================== */
-
-
-
-//static int os_execute (lua_State *L) {
-//  const char *cmd = luaL_optstring(L, 1, NULL);
-//  int stat;
-//  errno = 0;
-//  stat = system(cmd);
-//  if (cmd != NULL)
-//    return luaL_execresult(L, stat);
-//  else {
-//    lua_pushboolean(L, stat);  /* true if there is a shell */
-//    return 1;
-//  }
-//}
-
-
-static int os_remove (lua_State *L) {
-  const char *filename = luaL_checkstring(L, 1);
-  return luaL_fileresult(L, remove(filename) == 0, filename);
-}
-
-
-static int os_rename (lua_State *L) {
-  const char *fromname = luaL_checkstring(L, 1);
-  const char *toname = luaL_checkstring(L, 2);
-  return luaL_fileresult(L, rename(fromname, toname) == 0, NULL);
-}
-
-
-static int os_tmpname (lua_State *L) {
-  char buff[LUA_TMPNAMBUFSIZE];
-  int err;
-  lua_tmpnam(buff, err);
-  if (l_unlikely(err))
-    return luaL_error(L, "unable to generate a unique filename");
-  lua_pushstring(L, buff);
-  return 1;
-}
-
-
-static int os_getenv (lua_State *L) {
-  lua_pushstring(L, getenv(luaL_checkstring(L, 1)));  /* if NULL push nil */
-  return 1;
-}
 
 
 static int os_clock (lua_State *L) {
@@ -260,9 +173,7 @@ static int getfield (lua_State *L, const char *key, int d, int delta) {
     res = d;
   }
   else {
-    /* unsigned avoids overflow when lua_Integer has 32 bits */
-    if (!(res >= 0 ? (lua_Unsigned)res <= (lua_Unsigned)INT_MAX + delta
-                   : (lua_Integer)INT_MIN + delta <= res))
+    if (!(res >= 0 ? res - delta <= INT_MAX : INT_MIN + delta <= res))
       return luaL_error(L, "field '%s' is out-of-bound", key);
     res -= delta;
   }
@@ -379,43 +290,15 @@ static int os_difftime (lua_State *L) {
 /* }====================================================== */
 
 
-static int os_setlocale (lua_State *L) {
-  static const int cat[] = {LC_ALL, LC_COLLATE, LC_CTYPE, LC_MONETARY,
-                      LC_NUMERIC, LC_TIME};
-  static const char *const catnames[] = {"all", "collate", "ctype", "monetary",
-     "numeric", "time", NULL};
-  const char *l = luaL_optstring(L, 1, NULL);
-  int op = luaL_checkoption(L, 2, "all", catnames);
-  lua_pushstring(L, setlocale(cat[op], l));
-  return 1;
-}
-
-
-static int os_exit (lua_State *L) {
-  int status;
-  if (lua_isboolean(L, 1))
-    status = (lua_toboolean(L, 1) ? EXIT_SUCCESS : EXIT_FAILURE);
-  else
-    status = (int)luaL_optinteger(L, 1, EXIT_SUCCESS);
-  if (lua_toboolean(L, 2))
-    lua_close(L);
-  if (L) exit(status);  /* 'if' to avoid warnings for unreachable 'return' */
-  return 0;
-}
-
-
 static const luaL_Reg syslib[] = {
   {"clock",     os_clock},
   {"date",      os_date},
   {"difftime",  os_difftime},
-//  {"execute",   os_execute},
-  {"exit",      os_exit},
-  {"getenv",    os_getenv},
-  {"remove",    os_remove},
-  {"rename",    os_rename},
-  {"setlocale", os_setlocale},
+  /*
+  ** Process, environment, locale, and filesystem mutation functions are
+  ** intentionally omitted. Hosts should inject narrow capabilities instead.
+  */
   {"time",      os_time},
-  {"tmpname",   os_tmpname},
   {NULL, NULL}
 };
 
@@ -427,4 +310,3 @@ LUAMOD_API int luaopen_os (lua_State *L) {
   luaL_newlib(L, syslib);
   return 1;
 }
-

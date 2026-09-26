@@ -570,7 +570,7 @@ static const char *match_capture (MatchState *ms, const char *s, int l) {
 static const char *match (MatchState *ms, const char *s, const char *p) {
   if (l_unlikely(ms->matchdepth-- == 0))
     luaL_error(ms->L, "pattern too complex");
-  init: /* using goto's to optimize tail recursion */
+  init: /* using goto to optimize tail recursion */
   if (p != ms->p_end) {  /* end of pattern? */
     switch (*p) {
       case '(': {  /* start capture */
@@ -757,7 +757,6 @@ static int nospecials (const char *p, size_t l) {
 static void prepstate (MatchState *ms, lua_State *L,
                        const char *s, size_t ls, const char *p, size_t lp) {
   ms->L = L;
-  ms->matchdepth = MAXCCALLS;
   ms->src_init = s;
   ms->src_end = s + ls;
   ms->p_end = p + lp;
@@ -765,8 +764,8 @@ static void prepstate (MatchState *ms, lua_State *L,
 
 
 static void reprepstate (MatchState *ms) {
+  ms->matchdepth = MAXCCALLS;
   ms->level = 0;
-  lua_assert(ms->matchdepth == MAXCCALLS);
 }
 
 

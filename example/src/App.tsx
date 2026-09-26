@@ -1,33 +1,36 @@
 import * as React from 'react';
 import { useRef } from 'react';
 
-import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, ScrollView, Platform } from 'react-native';
+import { StyleSheet, View, Text, TextInput, Button, KeyboardAvoidingView, Alert, ScrollView } from 'react-native';
 import { LuaInterpreter, luaInterpreter, LUA_ERROR_CODE, multiply } from 'react-native-lua';
 
-const defaultInterpString = `co = coroutine.create(function ()
-for i=1,10 
-do
-  print("co", i)
-  print(i * 2)
-  coroutine.yield()
-end
+const defaultInterpString = `assert(os == nil, "unsafe os library must not be ambient")
+assert(package == nil, "filesystem/native module loading must not be ambient")
+print(_VERSION)
+print("os.execute disabled", os == nil)
+
+local socket = require("socket")
+local http = require("socket.http")
+local mime = require("mime")
+local unix = require("socket.unix")
+print(socket._VERSION)
+print("HTTP helper", type(http.request))
+print("MIME helper", type(mime.b64))
+print("TCP/UDP/Unix", type(socket.tcp), type(socket.udp), type(unix.stream))
+
+co = coroutine.create(function ()
+  for i=1,10 do
+    print("coroutine", i, i * 2)
+    coroutine.yield()
+  end
 end)
 
-i = 0
-while(i < 10)
-do
-  coroutine.resume(co)
-  sleep(1000)
-  i = i + 1
+while coroutine.status(co) ~= "dead" do
+  assert(coroutine.resume(co))
 end
 `
-const defaultAndroidString = `i = 0
-while(i < 10) 
-do print(i) i = i + 1
-end`
-
 function useAnimationFrameCallback(cb: (dt: number) => void, deps: any[]) {
-  const frame = useRef<ReturnType<typeof requestAnimationFrame>>();
+  const frame = useRef<ReturnType<typeof requestAnimationFrame> | undefined>(undefined);
   const prev = useRef(Date.now());
   const animate = () => {
     const now = Date.now();
@@ -54,10 +57,16 @@ export default function App() {
   React.useEffect(() => {
     multiply(3, 7).then(setResult);
   }, []);
-  const __interpreter = useRef<LuaInterpreter>();
+  const __interpreter = useRef<LuaInterpreter | undefined>(undefined);
   const getInterpreter = React.useCallback(() => {
     if (!__interpreter.current) {
-      __interpreter.current = luaInterpreter();
+      __interpreter.current = luaInterpreter({
+        executionLimitMs: 2000,
+        memoryLimitBytes: 8 * 1024 * 1024,
+        maxOutputBytes: 16 * 1024,
+        maxOutputLines: 256,
+        allowNetwork: true,
+      });
     }
     return __interpreter.current;
   }, []);
@@ -88,6 +97,7 @@ export default function App() {
   return (
     <View style={styles.container}>
       <View style={{ height: 20 }} />
+      <Text>Native multiply smoke test: {result ?? 'loading'} (expected 21)</Text>
       <Button title='Reload New Interpreter' onPress={() => {
         __interpreter.current = luaInterpreter();
       }} />
@@ -137,7 +147,6 @@ export default function App() {
           textAlignVertical='top'
           multiline={true}
           autoCapitalize='none'
-          autoCompleteType='off'
           autoCorrect={false}
           onChangeText={setInterpText}
           value={interpText}

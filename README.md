@@ -1,94 +1,115 @@
 # react-native-lua
 
-Native Lua in React Native
-Heavily based on React Native JSI 😅.
-Working in both iOS and Android.
+An embedded Lua 5.4.9 runtime for React Native. One package supports both the
+legacy bridge used by the RN 0.64 example and generated TurboModules/JSI binding
+installation in RN 0.83 New Architecture apps.
 
-Lots of inspiration from [ObjC-Lua](https://github.com/PedestrianSean/ObjC-Lua) and [ilua](https://github.com/profburke/ilua).
-
-The Lua source version (as of February 2022) is `5.4.4`.
-- Minimally modified, simply prevented MakeFile from being detected and commented out `os_execute` from `loslib.c` to prevent calls to `system(cmd)` from occuring (unavailable on iOS).
+The public interpreter is a JSI HostObject in both cases. Architecture only
+changes how `SKRNNativeLuaNewInterpreter` is installed into the JavaScript
+runtime; interpreter creation and the Lua C/C++ core are shared.
 
 ## Installation
 
 ```sh
-npm install react-native-lua
+yarn add react-native-lua
 ```
 
-#### iOS
-```
-cd ios && pod install
-```
-#### Android
-You need NDK installed. That's it.
+Run `pod install` for iOS and rebuild the native app. Expo apps require a
+development/native build; Expo Go cannot load custom native code.
+
+The pod keeps the package's original iOS 10 deployment floor. A consuming
+React Native or Expo app can choose its own higher deployment target.
 
 ## Usage
 
-Methods can be seen in the types.
+```ts
+import {luaInterpreter, LUA_ERROR_CODE} from 'react-native-lua';
 
-Almost all methods are simply the same as known C api methods of the pattern `lua_${methodName}`, sans the `lua_` prefix.
+const lua = luaInterpreter({
+  executionLimitMs: 2_000,
+  memoryLimitBytes: 8 * 1024 * 1024,
+  maxOutputBytes: 16 * 1024,
+  maxOutputLines: 256,
+});
 
-```js
-import { luaInterpreter } from "react-native-lua";
-// Create a new interpreter
-const interp = luaInterpreter();
-// this is equivalent to lua_dostring
-interp.dostring(`a = 2
-b = a ^ 2
-a = b * 20
-    `);
-// Or asynchronously! Each Lua Interpreter spawns its own thread when executing async code, so this doesn't block any other processes.
-interp.dostringasync(`i = 0
-while(i < 8)
-do
-  print(i)
-  sleep(100)
-  i = i + 1
-end`)
+const status = lua.dostring(`
+  local total = 0
+  for i = 1, 10 do total = total + i end
+  print(total)
+`);
 
-// The rest is up to you!
+if (status === 0) {
+  console.log(lua.getPrint()); // 55
+} else if (status === LUA_ERROR_CODE.LUA_DEADLINE_EXCEEDED) {
+  console.warn('script exceeded its deadline');
+} else {
+  console.warn(lua.getLatestError());
+}
 ```
 
-#### The interpreter in action
-![the-interpreter-in-action](/docs/images/example-coroutine-async-demonstration.gif)
+`dostringasync` and `dofileasync` keep their existing callback signatures, but
+Lua now runs on one owned native worker per interpreter. Native code publishes
+plain result data; a small JavaScript poll delivers the callback on the JS
+thread, so no JSI callback or runtime pointer crosses threads. New code can use
+`executeStringAsync` / `executeFileAsync` for a structured Promise result.
+Call `cancel()` to stop an active worker or `destroy()` to cancel, join, and
+close it deterministically.
 
-## Execution limits
+The HostObject also retains the low-level Lua stack operations for advanced
+callers (`push*`, `getglobal`, `settable`, `type`, and related methods).
 
-Since Lua is a scripting language, it wouldn't be nice if our code suddenly got stuck in a forever loop and blocks the whole program.
+## Security and resource boundaries
 
-This library handles this condition by leveraging Lua runtime's `lua_sethook` function (which allows us to monitor the code execution every N commands).
+New interpreters default to an allowlist of Lua's base, coroutine, table,
+string, math, and UTF-8 libraries. `io`, `os`, `package`, and `debug` are not
+ambient globals. `dofile` is denied unless `allowFileSystem` is explicitly set,
+and bytecode is rejected unless `allowBytecode` is explicitly set.
 
-The property `executionLimit` defines the number of milliseconds the script should run until it is terminated. Default value is 10000 (10 seconds). You can set this value by calling `setExecutionLimit(ms)`
+The bundled Lua source also removes `os.execute` from `loslib.c`. It remains
+absent even if a native integrator explicitly opens the OS library.
 
-## Future plans
-- Make async `dostringasync` and `dofileasync` work on Android
-    - iOS `dostringasync` is working perfectly well, however, in Android it is only possible to use `dostring` since CallInvoker crashes immediately when InvokeAsync() is called. Any help in getting this working would be very much appreciated.
+Each interpreter has:
 
+- a monotonic execution deadline checked by a Lua instruction hook;
+- a capped Lua allocator (32 MiB by default, 512 KiB minimum);
+- bounded captured output (64 KiB and 1,000 lines by default);
+- explicit cancellation and destruction;
+- text-only loading by default.
 
-## Contributing
+Run the native security/resource regression test with:
 
-See the [contributing guide](CONTRIBUTING.md) to learn how to contribute to the repository and the development workflow.
+```sh
+yarn test:native
+```
+
+## Curated capability injection
+
+The generic engine intentionally contains no ScriptWeaver or RetroZero command
+namespace. A higher-level native adapter can construct `SKRNLuaInterpreter`
+and call `withState(...)` before exposing it, registering only specific Lua C
+functions/tables that the user granted. For example, a ScriptWeaver adapter
+might inject `retro.notify()` and `retro.readSetting()` while omitting network,
+filesystem, process, and arbitrary native-module access.
+
+Keep policy, permission prompts, command schemas, and host-action dispatch in
+that adapter. Do not enable all Lua OS/package libraries as a substitute for
+capability injection.
+
+## Legacy Monterey example
+
+`example/` remains a real RN 0.64.3 app and links this package through CocoaPods
+and Gradle. It creates the actual HostObject, runs Lua coroutines, prints the
+Lua version and verifies that the ambient `os` library is unavailable.
+
+Use the older Node/Yarn/Xcode toolchain appropriate for RN 0.64 on Monterey:
+
+```sh
+yarn
+yarn example
+yarn pods
+yarn example ios
+```
 
 ## License
 
 MIT
-
-
----
-##### Tip Jar
-
-If you appreciate my work, help buy me some soda 🥤 via the following routes.
-
-<img src="https://upload.wikimedia.org/wikipedia/commons/5/56/Stellar_Symbol.png" alt="Stellar" height="32"/>
-
-```
-Stellar Lumens (XLM) : 
-GCVKPZQUDXWVNPIIMF3FXR6KWAOHTEWPZZM2AQE4J3TXR6ZDHXQHP5BQ
-```
-
-<img src="https://upload.wikimedia.org/wikipedia/commons/1/19/Coin-ada-big.svg" alt="Cardano" height="32">
-
-```
-Cardano (ADA) : 
-addr1q9datt8urnyuc2059tquh59sva0pja7jqg4nfhnje7xcy6zpndeesglqkxhjvcgdu820flcecjzunwp6qen4yr92gm6smssug8
-```
