@@ -61,6 +61,11 @@ class SKRNLuaInterpreter final
   bool takeAsyncResult(std::uint64_t taskId, rnlua::ExecutionResult& result);
   void joinCompletedWorker();
   void shutdown() noexcept;
+  void runProtectedStateOperation(
+      facebook::jsi::Runtime& runtime,
+      rnlua::LuaRuntime::ProtectedStateOperation operation,
+      void* context);
+
 
   std::unique_ptr<rnlua::LuaRuntime> lua_;
   lua_State* state_ = nullptr;

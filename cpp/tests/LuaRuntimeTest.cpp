@@ -15,6 +15,10 @@ extern "C" {
 
 namespace {
 
+void protectedFailure(lua_State* state, void*) {
+  luaL_error(state, "protected stack failure");
+}
+
 void require(bool condition, const std::string& message) {
   if (!condition) {
     std::cerr << "FAIL: " << message << '\n';
@@ -151,6 +155,70 @@ int main() {
     const auto result = runtime.executeString("while true do end");
     require(result.code == rnlua::kDeadlineExceeded,
             "infinite loops must hit the execution deadline");
+  }
+
+  {
+    rnlua::InterpreterOptions options;
+    options.executionLimitMs = 20;
+    rnlua::LuaRuntime runtime(options);
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = runtime.executeString(R"lua(
+      while true do
+        pcall(function() while true do end end)
+      end
+    )lua");
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started);
+    require(result.code == rnlua::kDeadlineExceeded,
+            "pcall must not swallow a sticky execution deadline");
+    require(elapsed.count() < 500,
+            "caught deadline errors must still unwind promptly");
+  }
+
+  {
+    rnlua::LuaRuntime runtime;
+    const auto result = runtime.executeString(R"lua(
+      local env = {answer = 42}
+      local chunk = assert(load("return answer", "env-test", "t", env))
+      assert(chunk() == 42)
+
+      local pieces = {"return ", "21 * 2", nil}
+      local index = 0
+      local readerChunk = assert(load(function()
+        index = index + 1
+        return pieces[index]
+      end, "reader-test"))
+      assert(readerChunk() == 42)
+    )lua");
+    require(result.code == 0,
+            "text-only load must preserve reader and environment semantics: " +
+                result.error);
+  }
+
+  {
+    rnlua::LuaRuntime runtime;
+    const auto result = runtime.executeString(R"lua(
+      local ok, err = pcall(function()
+        setmetatable({}, {__gc = function() while true do end end})
+      end)
+      assert(not ok)
+      assert(tostring(err):find("__gc", 1, true))
+    )lua");
+    require(result.code == 0,
+            "script-defined __gc finalizers must be rejected: " + result.error);
+  }
+
+  {
+    rnlua::LuaRuntime runtime;
+    bool threw = false;
+    try {
+      runtime.runProtectedStateOperation(&protectedFailure, nullptr);
+    } catch (const std::exception& error) {
+      threw = std::string(error.what()).find("protected stack failure") !=
+          std::string::npos;
+    }
+    require(threw,
+            "protected stack operations must translate Lua errors instead of aborting");
   }
 
   {

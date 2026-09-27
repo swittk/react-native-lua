@@ -102,6 +102,204 @@ jsi::Object executionResultObject(
   return value;
 }
 
+enum class StackOperationKind {
+  PushBoolean,
+  PushInteger,
+  PushNumber,
+  PushNil,
+  PushGlobalTable,
+  PushString,
+  PushThread,
+  PushValue,
+  RawGet,
+  RawLen,
+  RawSet,
+  Remove,
+  Insert,
+  Replace,
+  SetMetatable,
+  SetTable,
+  SetTop,
+  GetTable,
+  ToBoolean,
+  ToClose,
+  ToInteger,
+  ToNumber,
+  ToString,
+  ToPointer,
+  ToThread,
+  Type,
+  RawEqual,
+  RawGetI,
+  RawSetI,
+  Rotate,
+  SetI,
+  SetIUserValue,
+  SetField,
+  SetGlobal,
+  GetGlobal,
+  VarAsNumber,
+  StringToNumber,
+};
+
+struct StackOperationContext {
+  StackOperationKind kind;
+  int first = 0;
+  lua_Integer second = 0;
+  lua_Number number = 0;
+  const char* text = nullptr;
+  std::size_t textSize = 0;
+  int intResult = 0;
+  lua_Integer integerResult = 0;
+  lua_Number numberResult = 0;
+  std::size_t sizeResult = 0;
+  const char* textResult = nullptr;
+  std::size_t textResultSize = 0;
+  const void* pointerResult = nullptr;
+  lua_State* threadResult = nullptr;
+};
+
+void requireLuaStack(lua_State* state, int slots) {
+  if (!lua_checkstack(state, slots)) {
+    luaL_error(state, "Lua stack limit exceeded");
+  }
+}
+
+void performStackOperation(lua_State* state, void* rawContext) {
+  auto* context = static_cast<StackOperationContext*>(rawContext);
+  switch (context->kind) {
+    case StackOperationKind::PushBoolean:
+      requireLuaStack(state, 1);
+      lua_pushboolean(state, context->first != 0);
+      return;
+    case StackOperationKind::PushInteger:
+      requireLuaStack(state, 1);
+      lua_pushinteger(state, context->second);
+      return;
+    case StackOperationKind::PushNumber:
+      requireLuaStack(state, 1);
+      lua_pushnumber(state, context->number);
+      return;
+    case StackOperationKind::PushNil:
+      requireLuaStack(state, 1);
+      lua_pushnil(state);
+      return;
+    case StackOperationKind::PushGlobalTable:
+      requireLuaStack(state, 1);
+      lua_pushglobaltable(state);
+      return;
+    case StackOperationKind::PushString:
+      requireLuaStack(state, 1);
+      lua_pushlstring(state, context->text, context->textSize);
+      return;
+    case StackOperationKind::PushThread:
+      requireLuaStack(state, 1);
+      context->intResult = lua_pushthread(state);
+      return;
+    case StackOperationKind::PushValue:
+      requireLuaStack(state, 1);
+      lua_pushvalue(state, context->first);
+      return;
+    case StackOperationKind::RawGet:
+      context->intResult = lua_rawget(state, context->first);
+      return;
+    case StackOperationKind::RawLen:
+      context->sizeResult = lua_rawlen(state, context->first);
+      return;
+    case StackOperationKind::RawSet:
+      lua_rawset(state, context->first);
+      return;
+    case StackOperationKind::Remove:
+      lua_remove(state, context->first);
+      return;
+    case StackOperationKind::Insert:
+      lua_insert(state, context->first);
+      return;
+    case StackOperationKind::Replace:
+      lua_replace(state, context->first);
+      return;
+    case StackOperationKind::SetMetatable:
+      context->intResult = lua_setmetatable(state, context->first);
+      return;
+    case StackOperationKind::SetTable:
+      lua_settable(state, context->first);
+      return;
+    case StackOperationKind::SetTop:
+      lua_settop(state, context->first);
+      return;
+    case StackOperationKind::GetTable:
+      context->intResult = lua_gettable(state, context->first);
+      return;
+    case StackOperationKind::ToBoolean:
+      context->intResult = lua_toboolean(state, context->first);
+      return;
+    case StackOperationKind::ToClose:
+      lua_toclose(state, context->first);
+      return;
+    case StackOperationKind::ToInteger:
+      context->integerResult = lua_tointeger(state, context->first);
+      return;
+    case StackOperationKind::ToNumber:
+      context->numberResult = lua_tonumber(state, context->first);
+      return;
+    case StackOperationKind::ToString:
+      context->textResult =
+          lua_tolstring(state, context->first, &context->textResultSize);
+      return;
+    case StackOperationKind::ToPointer:
+      context->pointerResult = lua_topointer(state, context->first);
+      return;
+    case StackOperationKind::ToThread:
+      context->threadResult = lua_tothread(state, context->first);
+      return;
+    case StackOperationKind::Type:
+      context->intResult = lua_type(state, context->first);
+      return;
+    case StackOperationKind::RawEqual:
+      context->intResult =
+          lua_rawequal(state, context->first, static_cast<int>(context->second));
+      return;
+    case StackOperationKind::RawGetI:
+      requireLuaStack(state, 1);
+      context->intResult = lua_rawgeti(state, context->first, context->second);
+      return;
+    case StackOperationKind::RawSetI:
+      lua_rawseti(state, context->first, context->second);
+      return;
+    case StackOperationKind::Rotate:
+      lua_rotate(state, context->first, static_cast<int>(context->second));
+      return;
+    case StackOperationKind::SetI:
+      lua_seti(state, context->first, context->second);
+      return;
+    case StackOperationKind::SetIUserValue:
+      context->intResult =
+          lua_setiuservalue(state, context->first, static_cast<int>(context->second));
+      return;
+    case StackOperationKind::SetField:
+      lua_setfield(state, context->first, context->text);
+      return;
+    case StackOperationKind::SetGlobal:
+      lua_setglobal(state, context->text);
+      return;
+    case StackOperationKind::GetGlobal:
+      requireLuaStack(state, 1);
+      context->intResult = lua_getglobal(state, context->text);
+      return;
+    case StackOperationKind::VarAsNumber:
+      requireLuaStack(state, 1);
+      lua_getglobal(state, context->text);
+      context->numberResult =
+          lua_isnumber(state, -1) ? lua_tonumber(state, -1) : 0;
+      lua_pop(state, 1);
+      return;
+    case StackOperationKind::StringToNumber:
+      requireLuaStack(state, 1);
+      context->sizeResult = lua_stringtonumber(state, context->text);
+      return;
+  }
+}
+
 const std::vector<std::string> kInterpreterKeys = {
     "dostringasync", "dofileasync", "dostring", "dofile", "printCount",
     "executeStringResult", "executeFileResult", "startStringAsync",
@@ -247,6 +445,23 @@ void SKRNLuaInterpreter::withState(
     throw std::runtime_error("Interpreter is executing");
   }
   lua_->withState(callback);
+}
+
+void SKRNLuaInterpreter::runProtectedStateOperation(
+    jsi::Runtime& runtime,
+    rnlua::LuaRuntime::ProtectedStateOperation operation,
+    void* context) {
+  if (lua_ == nullptr || destroyed_.load() || !lua_->isOpen()) {
+    throw jsi::JSError(runtime, "Lua interpreter is destroyed");
+  }
+  if (executing_.load()) {
+    throw jsi::JSError(runtime, "Lua interpreter is executing asynchronously");
+  }
+  try {
+    lua_->runProtectedStateOperation(operation, context);
+  } catch (const std::exception& error) {
+    throw jsi::JSError(runtime, error.what());
+  }
 }
 
 jsi::Value SKRNLuaInterpreter::get(
@@ -431,38 +646,55 @@ jsi::Value SKRNLuaInterpreter::get(
   }
 
   if (method == "pop") {
-    return makeHostFunction(runtime, name, 1, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
-      if (n < 1) throw jsi::JSError(runtime, "Expected count");
-      lua_pop(state(), static_cast<int>(a[0].asNumber()));
+    return makeHostFunction(runtime, name, 1, [self](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
+      if (n < 1 || !a[0].isNumber()) throw jsi::JSError(runtime, "Expected count");
+      StackOperationContext operation{StackOperationKind::SetTop};
+      const int count = static_cast<int>(a[0].asNumber());
+      const int top = self->state_ == nullptr ? 0 : lua_gettop(self->state_);
+      operation.first = std::max(0, top - std::max(0, count));
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       return jsi::Value::undefined();
     });
   }
   if (method == "pushboolean" || method == "pushinteger" || method == "pushnumber") {
-    return makeHostFunction(runtime, name, 1, [state, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
+    return makeHostFunction(runtime, name, 1, [self, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
       if (n < 1 || !a[0].isNumber()) throw jsi::JSError(runtime, "Expected number");
-      if (method == "pushboolean") lua_pushboolean(state(), a[0].asNumber() != 0);
-      else if (method == "pushinteger") lua_pushinteger(state(), static_cast<lua_Integer>(a[0].asNumber()));
-      else lua_pushnumber(state(), a[0].asNumber());
+      StackOperationContext operation{
+          method == "pushboolean" ? StackOperationKind::PushBoolean
+          : method == "pushinteger" ? StackOperationKind::PushInteger
+                                    : StackOperationKind::PushNumber};
+      operation.first = a[0].asNumber() != 0 ? 1 : 0;
+      operation.second = static_cast<lua_Integer>(a[0].asNumber());
+      operation.number = a[0].asNumber();
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       return jsi::Value::undefined();
     });
   }
   if (method == "pushnil" || method == "pushglobaltable") {
-    return makeHostFunction(runtime, name, 0, [state, method](jsi::Runtime&, const jsi::Value&, const jsi::Value*, std::size_t) {
-      if (method == "pushnil") lua_pushnil(state()); else lua_pushglobaltable(state());
+    return makeHostFunction(runtime, name, 0, [self, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value*, std::size_t) {
+      StackOperationContext operation{
+          method == "pushnil" ? StackOperationKind::PushNil
+                              : StackOperationKind::PushGlobalTable};
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       return jsi::Value::undefined();
     });
   }
   if (method == "pushstring") {
-    return makeHostFunction(runtime, name, 1, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
+    return makeHostFunction(runtime, name, 1, [self](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
       if (n < 1 || !a[0].isString()) throw jsi::JSError(runtime, "Expected string");
       const std::string value = a[0].asString(runtime).utf8(runtime);
-      lua_pushlstring(state(), value.data(), value.size());
+      StackOperationContext operation{StackOperationKind::PushString};
+      operation.text = value.data();
+      operation.textSize = value.size();
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       return jsi::Value::undefined();
     });
   }
   if (method == "pushthread") {
-    return makeHostFunction(runtime, name, 0, [state](jsi::Runtime&, const jsi::Value&, const jsi::Value*, std::size_t) {
-      return jsi::Value(lua_pushthread(state()));
+    return makeHostFunction(runtime, name, 0, [self](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value*, std::size_t) {
+      StackOperationContext operation{StackOperationKind::PushThread};
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
+      return jsi::Value(operation.intResult);
     });
   }
   if (method == "pushvalue" || method == "rawget" || method == "rawlen" ||
@@ -472,69 +704,131 @@ jsi::Value SKRNLuaInterpreter::get(
       method == "toclose" || method == "tointeger" || method == "tonumber" ||
       method == "tostring" || method == "topointer" ||
       method == "tothread" || method == "type") {
-    return makeHostFunction(runtime, name, 1, [state, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) -> jsi::Value {
-      const int index = n > 0 && a[0].isNumber() ? static_cast<int>(a[0].asNumber()) : -1;
-      lua_State* L = state();
-      if (method == "pushvalue") { lua_pushvalue(L, index); return jsi::Value::undefined(); }
-      if (method == "rawget") return jsi::Value(lua_rawget(L, index));
-      if (method == "rawlen") return jsi::Value(static_cast<double>(lua_rawlen(L, index)));
-      if (method == "rawset") { lua_rawset(L, index); return jsi::Value::undefined(); }
-      if (method == "remove") { lua_remove(L, index); return jsi::Value::undefined(); }
-      if (method == "insert") { lua_insert(L, index); return jsi::Value::undefined(); }
-      if (method == "replace") { lua_replace(L, index); return jsi::Value::undefined(); }
-      if (method == "setmetatable") return jsi::Value(lua_setmetatable(L, index));
-      if (method == "settable") { lua_settable(L, index); return jsi::Value::undefined(); }
-      if (method == "settop") { lua_settop(L, index); return jsi::Value::undefined(); }
-      if (method == "gettable") return jsi::Value(lua_gettable(L, index));
-      if (method == "toboolean") return jsi::Value(lua_toboolean(L, index));
-      if (method == "toclose") { lua_toclose(L, index); return jsi::Value::undefined(); }
-      if (method == "tointeger") return jsi::Value(static_cast<double>(lua_tointeger(L, index)));
-      if (method == "tonumber") return jsi::Value(lua_tonumber(L, index));
-      if (method == "tostring") {
-        std::size_t size = 0;
-        const char* value = lua_tolstring(L, index, &size);
-        return value == nullptr ? jsi::Value::null() : jsi::String::createFromUtf8(runtime, std::string(value, size));
+    StackOperationKind kind =
+        method == "pushvalue" ? StackOperationKind::PushValue :
+        method == "rawget" ? StackOperationKind::RawGet :
+        method == "rawlen" ? StackOperationKind::RawLen :
+        method == "rawset" ? StackOperationKind::RawSet :
+        method == "remove" ? StackOperationKind::Remove :
+        method == "insert" ? StackOperationKind::Insert :
+        method == "replace" ? StackOperationKind::Replace :
+        method == "setmetatable" ? StackOperationKind::SetMetatable :
+        method == "settable" ? StackOperationKind::SetTable :
+        method == "settop" ? StackOperationKind::SetTop :
+        method == "gettable" ? StackOperationKind::GetTable :
+        method == "toboolean" ? StackOperationKind::ToBoolean :
+        method == "toclose" ? StackOperationKind::ToClose :
+        method == "tointeger" ? StackOperationKind::ToInteger :
+        method == "tonumber" ? StackOperationKind::ToNumber :
+        method == "tostring" ? StackOperationKind::ToString :
+        method == "topointer" ? StackOperationKind::ToPointer :
+        method == "tothread" ? StackOperationKind::ToThread :
+                               StackOperationKind::Type;
+    return makeHostFunction(runtime, name, 1, [self, method, kind](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a,
+        std::size_t n) -> jsi::Value {
+      const int index =
+          n > 0 && a[0].isNumber() ? static_cast<int>(a[0].asNumber()) : -1;
+      StackOperationContext operation{kind};
+      operation.first = index;
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
+      if (method == "rawget" || method == "setmetatable" ||
+          method == "gettable" || method == "toboolean" ||
+          method == "type") {
+        return jsi::Value(operation.intResult);
       }
-      if (method == "topointer") return jsi::Value(static_cast<double>(reinterpret_cast<std::uintptr_t>(lua_topointer(L, index))));
-      if (method == "tothread") return jsi::Value(static_cast<double>(reinterpret_cast<std::uintptr_t>(lua_tothread(L, index))));
-      return jsi::Value(lua_type(L, index));
+      if (method == "rawlen") {
+        return jsi::Value(static_cast<double>(operation.sizeResult));
+      }
+      if (method == "tointeger") {
+        return jsi::Value(static_cast<double>(operation.integerResult));
+      }
+      if (method == "tonumber") {
+        return jsi::Value(operation.numberResult);
+      }
+      if (method == "tostring") {
+        return operation.textResult == nullptr
+            ? jsi::Value::null()
+            : jsi::String::createFromUtf8(
+                  runtime,
+                  std::string(operation.textResult, operation.textResultSize));
+      }
+      if (method == "topointer") {
+        return jsi::Value(static_cast<double>(
+            reinterpret_cast<std::uintptr_t>(operation.pointerResult)));
+      }
+      if (method == "tothread") {
+        return jsi::Value(static_cast<double>(
+            reinterpret_cast<std::uintptr_t>(operation.threadResult)));
+      }
+      return jsi::Value::undefined();
     });
   }
   if (method == "rawequal" || method == "rawgeti" || method == "rawseti" ||
       method == "rotate" || method == "seti" || method == "setiuservalue") {
-    return makeHostFunction(runtime, name, 2, [state, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) -> jsi::Value {
-      if (n < 2 || !a[0].isNumber() || !a[1].isNumber()) throw jsi::JSError(runtime, "Expected two numbers");
-      const int first = static_cast<int>(a[0].asNumber());
-      const lua_Integer second = static_cast<lua_Integer>(a[1].asNumber());
-      lua_State* L = state();
-      if (method == "rawequal") return jsi::Value(lua_rawequal(L, first, static_cast<int>(second)));
-      if (method == "rawgeti") return jsi::Value(lua_rawgeti(L, first, second));
-      if (method == "rawseti") { lua_rawseti(L, first, second); return jsi::Value::undefined(); }
-      if (method == "rotate") { lua_rotate(L, first, static_cast<int>(second)); return jsi::Value::undefined(); }
-      if (method == "seti") { lua_seti(L, first, second); return jsi::Value::undefined(); }
-      return jsi::Value(lua_setiuservalue(L, first, static_cast<int>(second)));
-    });
-  }
-  if (method == "setfield") {
-    return makeHostFunction(runtime, name, 2, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
-      if (n < 2 || !a[0].isNumber() || !a[1].isString()) throw jsi::JSError(runtime, "Expected index and field");
-      const std::string key = a[1].asString(runtime).utf8(runtime);
-      lua_setfield(state(), static_cast<int>(a[0].asNumber()), key.c_str());
+    StackOperationKind kind =
+        method == "rawequal" ? StackOperationKind::RawEqual :
+        method == "rawgeti" ? StackOperationKind::RawGetI :
+        method == "rawseti" ? StackOperationKind::RawSetI :
+        method == "rotate" ? StackOperationKind::Rotate :
+        method == "seti" ? StackOperationKind::SetI :
+                           StackOperationKind::SetIUserValue;
+    return makeHostFunction(runtime, name, 2, [self, method, kind](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a,
+        std::size_t n) -> jsi::Value {
+      if (n < 2 || !a[0].isNumber() || !a[1].isNumber()) {
+        throw jsi::JSError(runtime, "Expected two numbers");
+      }
+      StackOperationContext operation{kind};
+      operation.first = static_cast<int>(a[0].asNumber());
+      operation.second = static_cast<lua_Integer>(a[1].asNumber());
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
+      if (method == "rawequal" || method == "rawgeti" ||
+          method == "setiuservalue") {
+        return jsi::Value(operation.intResult);
+      }
       return jsi::Value::undefined();
     });
   }
-  if (method == "setglobal" || method == "getglobal" || method == "var_asnumber" || method == "stringtonumber") {
-    return makeHostFunction(runtime, name, 1, [state, method](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) -> jsi::Value {
-      if (n < 1 || !a[0].isString()) throw jsi::JSError(runtime, "Expected string");
+  if (method == "setfield") {
+    return makeHostFunction(runtime, name, 2, [self](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a,
+        std::size_t n) {
+      if (n < 2 || !a[0].isNumber() || !a[1].isString()) {
+        throw jsi::JSError(runtime, "Expected index and field");
+      }
+      const std::string key = a[1].asString(runtime).utf8(runtime);
+      StackOperationContext operation{StackOperationKind::SetField};
+      operation.first = static_cast<int>(a[0].asNumber());
+      operation.text = key.c_str();
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
+      return jsi::Value::undefined();
+    });
+  }
+  if (method == "setglobal" || method == "getglobal" ||
+      method == "var_asnumber" || method == "stringtonumber") {
+    StackOperationKind kind =
+        method == "setglobal" ? StackOperationKind::SetGlobal :
+        method == "getglobal" ? StackOperationKind::GetGlobal :
+        method == "var_asnumber" ? StackOperationKind::VarAsNumber :
+                                   StackOperationKind::StringToNumber;
+    return makeHostFunction(runtime, name, 1, [self, method, kind](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a,
+        std::size_t n) -> jsi::Value {
+      if (n < 1 || !a[0].isString()) {
+        throw jsi::JSError(runtime, "Expected string");
+      }
       const std::string value = a[0].asString(runtime).utf8(runtime);
-      lua_State* L = state();
-      if (method == "setglobal") { lua_setglobal(L, value.c_str()); return jsi::Value::undefined(); }
-      if (method == "getglobal") { lua_getglobal(L, value.c_str()); return jsi::Value::undefined(); }
-      if (method == "stringtonumber") return jsi::Value(static_cast<double>(lua_stringtonumber(L, value.c_str())));
-      lua_getglobal(L, value.c_str());
-      const lua_Number result = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0;
-      lua_pop(L, 1);
-      return jsi::Value(result);
+      StackOperationContext operation{kind};
+      operation.text = value.c_str();
+      self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
+      if (method == "stringtonumber") {
+        return jsi::Value(static_cast<double>(operation.sizeResult));
+      }
+      if (method == "var_asnumber") {
+        return jsi::Value(operation.numberResult);
+      }
+      return jsi::Value::undefined();
     });
   }
   if (method == "typename") {

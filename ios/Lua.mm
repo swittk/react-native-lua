@@ -56,10 +56,22 @@ RCT_EXPORT_METHOD(multiply:(double)a
   [self installLegacyBindingsWhenReady];
 }
 
-/** Waits for RCTCxxBridge to publish its JSI runtime during bridge startup/reload. */
+/** Waits for RCTCxxBridge to publish its runtime, then mutates it on the JS queue. */
 - (void)installLegacyBindingsWhenReady
 {
-  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)self.bridge;
+  RCTBridge *bridge = self.bridge;
+  if (bridge == nil) {
+    return;
+  }
+
+  RCTBridge *runtimeBridge = [bridge isKindOfClass:[RCTCxxBridge class]]
+      ? bridge
+      : bridge.batchedBridge;
+  if (![runtimeBridge isKindOfClass:[RCTCxxBridge class]]) {
+    return;
+  }
+
+  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)runtimeBridge;
   if (cxxBridge.runtime == nullptr) {
     __weak SKNativeLua *weakSelf = self;
     dispatch_after(
@@ -70,18 +82,42 @@ RCT_EXPORT_METHOD(multiply:(double)a
     return;
   }
 
-  auto *runtime = reinterpret_cast<jsi::Runtime *>(cxxBridge.runtime);
-  SKRNNativeLua::install(*runtime, nullptr);
+  __weak SKNativeLua *weakSelf = self;
+  [cxxBridge dispatchBlock:^{
+    SKNativeLua *strongSelf = weakSelf;
+    if (strongSelf == nil || strongSelf.bridge == nil) {
+      return;
+    }
+    auto *runtime = reinterpret_cast<jsi::Runtime *>(cxxBridge.runtime);
+    if (runtime != nullptr) {
+      SKRNNativeLua::install(*runtime, nullptr);
+    }
+  } queue:RCTJSThread];
 }
 
-/** Removes the legacy runtime global before the bridge tears down. */
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(installBindings)
+{
+  RCTBridge *bridge = self.bridge;
+  RCTBridge *runtimeBridge = [bridge isKindOfClass:[RCTCxxBridge class]]
+      ? bridge
+      : bridge.batchedBridge;
+  if (![runtimeBridge isKindOfClass:[RCTCxxBridge class]]) {
+    return @NO;
+  }
+
+  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)runtimeBridge;
+  auto *runtime = reinterpret_cast<jsi::Runtime *>(cxxBridge.runtime);
+  if (runtime == nullptr) {
+    return @NO;
+  }
+  SKRNNativeLua::install(*runtime, nullptr);
+  return @YES;
+}
+
+/** The bridge owns the runtime and destroys its globals during invalidation. */
 - (void)invalidate
 {
-  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)self.bridge;
-  if (cxxBridge.runtime != nullptr) {
-    auto *runtime = reinterpret_cast<jsi::Runtime *>(cxxBridge.runtime);
-    SKRNNativeLua::cleanup(*runtime);
-  }
+  _bridge = nil;
 }
 
 #endif

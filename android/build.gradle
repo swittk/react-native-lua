@@ -57,12 +57,35 @@ def newArchitectureEnabled =
 def reactNativeArchitectures = project.findProperty("reactNativeArchitectures")
 
 apply plugin: "com.facebook.react"
+
+def selectedReactNativeDir = file("${nodeModules}/react-native")
+def nestedCodegenDir = file("${selectedReactNativeDir}/node_modules/@react-native/codegen")
+def siblingCodegenDir = new File(
+    selectedReactNativeDir.canonicalFile.parentFile,
+    "@react-native/codegen")
+def topLevelCodegenDir = file("${nodeModules}/@react-native/codegen")
+def selectedCodegenDir = nestedCodegenDir.exists()
+    ? nestedCodegenDir
+    : (siblingCodegenDir.exists() ? siblingCodegenDir : topLevelCodegenDir)
+
 react {
   libraryName = "NativeLuaSpec"
   jsRootDir = file("..")
-  reactNativeDir = file("${nodeModules}/react-native")
-  codegenDir = file("${nodeModules}/@react-native/codegen")
+  reactNativeDir = selectedReactNativeDir
+  codegenDir = selectedCodegenDir
   codegenJavaPackageName = "com.reactnativelua"
+}
+
+// RN 0.83+ library codegen reads the root privateReact extension. In a normal
+// app build the application plugin owns that value; for standalone library
+// validation, fill it only when its default codegen path does not exist.
+def privateReact = rootProject.extensions.findByName("privateReact")
+if (privateReact != null) {
+  def rootCodegen = privateReact.codegenDir.orNull?.asFile
+  if (rootCodegen == null || !rootCodegen.exists()) {
+    privateReact.reactNativeDir.set(selectedReactNativeDir)
+    privateReact.codegenDir.set(selectedCodegenDir)
+  }
 }
 
 def safeExtGet(String name, Object fallback) {

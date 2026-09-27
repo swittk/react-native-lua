@@ -128,9 +128,9 @@ loaders, or raw filesystem/network access to untrusted scripts.
 this checkout, creates the actual HostObject, loads LuaSocket helpers, runs Lua
 coroutines, and verifies that unsafe ambient libraries remain unavailable.
 
-The example has its own RN 0.73 dependency tree, so it can use the owner's
-working Monterey/Node toolchain independently of the repository's RN 0.83
-development dependency:
+The example has its own RN 0.73 dependency tree, but this workspace also
+installs the root RN 0.83 development toolchain. Use Node 20.19.4 or newer for
+the root-level pnpm commands below (Node 22 is also supported):
 
 ```sh
 pnpm install

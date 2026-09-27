@@ -193,7 +193,12 @@ export function multiply(a: number, b: number): Promise<number> {
 /** Creates a real native HostObject on both legacy and New Architecture builds. */
 export function luaInterpreter(options?: LuaInterpreterOptions): LuaInterpreter {
   // Referencing the module above triggers TurboModule construction and its JSI
-  // binding installer. Legacy builds install during setBridge:.
+  // binding installer. Legacy builds also expose a synchronous fallback so a
+  // first call cannot race the eager JS-queue installation.
+  if (NativeLua && typeof globalThis.SKRNNativeLuaNewInterpreter !== 'function') {
+    const legacyBinding = NativeLua as unknown as {installBindings?: () => void};
+    legacyBinding.installBindings?.();
+  }
   if (!NativeLua || typeof globalThis.SKRNNativeLuaNewInterpreter !== 'function') {
     throw new Error(LINKING_ERROR);
   }

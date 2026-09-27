@@ -2,6 +2,8 @@ package com.reactnativelua;
 
 import androidx.annotation.NonNull;
 
+import com.facebook.proguard.annotations.DoNotStrip;
+
 import com.facebook.react.bridge.JavaScriptContextHolder;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -11,6 +13,7 @@ import com.facebook.react.module.annotations.ReactModule;
 import com.facebook.react.turbomodule.core.CallInvokerHolderImpl;
 
 /** Legacy bridge module used by the RN 0.73.6 Monterey-compatible example. */
+@DoNotStrip
 @ReactModule(name = LuaModule.NAME)
 public final class LuaModule extends ReactContextBaseJavaModule {
   public static final String NAME = "SKNativeLua";
@@ -31,6 +34,8 @@ public final class LuaModule extends ReactContextBaseJavaModule {
   private static native void installLegacy(
       long runtimePointer,
       CallInvokerHolderImpl callInvokerHolder);
+
+  private static native void installLegacyNow(long runtimePointer);
 
   private static native void cleanupLegacy(long runtimePointer);
 
@@ -59,14 +64,19 @@ public final class LuaModule extends ReactContextBaseJavaModule {
     }
   }
 
-  /** Removes the legacy global before Catalyst destroys its runtime. */
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  public void installBindings() {
+    reactContext.assertOnJSQueueThread();
+    long runtimePointer = reactContext.getJavaScriptContextHolder().get();
+    if (runtimePointer != 0) {
+      installLegacyNow(runtimePointer);
+    }
+  }
+
+  /** The Catalyst runtime owns its globals and tears them down itself. */
   @SuppressWarnings("deprecation")
   @Override
   public void onCatalystInstanceDestroy() {
-    JavaScriptContextHolder jsContext = reactContext.getJavaScriptContextHolder();
-    if (jsContext.get() != 0) {
-      cleanupLegacy(jsContext.get());
-    }
     super.onCatalystInstanceDestroy();
   }
 }

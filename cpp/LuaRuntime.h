@@ -88,6 +88,12 @@ class LuaRuntime final {
    */
   void withState(const std::function<void(lua_State*)>& callback);
   lua_State* stateForAdvancedUse() noexcept;
+  using ProtectedStateOperation = void (*)(lua_State*, void*);
+  void runProtectedStateOperation(
+      ProtectedStateOperation operation,
+      void* context,
+      std::int64_t limitMs = 1'000);
+
 
  private:
   struct MemoryState {
@@ -101,6 +107,7 @@ class LuaRuntime final {
   static void debugHook(lua_State* state, lua_Debug* debugRecord);
   static int print(lua_State* state);
   static int textOnlyLoad(lua_State* state);
+  static int guardedSetmetatable(lua_State* state);
 
   void openLibraries();
   void appendOutput(std::string line);
@@ -114,6 +121,7 @@ class LuaRuntime final {
   lua_State* state_ = nullptr;
   std::atomic<bool> cancellationRequested_{false};
   std::atomic<std::int64_t> deadlineNs_{0};
+  std::atomic<int> interruptCode_{0};
   std::atomic<bool> outputTruncated_{false};
   mutable std::mutex outputMutex_;
   std::deque<std::string> output_;

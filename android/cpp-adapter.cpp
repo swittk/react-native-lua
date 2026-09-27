@@ -23,9 +23,20 @@ Java_com_reactnativelua_LuaModule_installLegacy(
       facebook::react::CallInvokerHolder::javaobject>(
       reinterpret_cast<facebook::react::CallInvokerHolder::javaobject>(
           callInvokerHolderObject));
-  SKRNNativeLua::install(
-      *reinterpret_cast<facebook::jsi::Runtime*>(runtimePointer),
-      holder->cthis()->getCallInvoker());
+  auto callInvoker = holder->cthis()->getCallInvoker();
+  auto* runtime = reinterpret_cast<facebook::jsi::Runtime*>(runtimePointer);
+  callInvoker->invokeAsync([runtime, callInvoker]() {
+    SKRNNativeLua::install(*runtime, callInvoker);
+  });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_reactnativelua_LuaModule_installLegacyNow(
+    JNIEnv*, jclass, jlong runtimePointer) {
+  if (runtimePointer != 0) {
+    SKRNNativeLua::install(
+        *reinterpret_cast<facebook::jsi::Runtime*>(runtimePointer), nullptr);
+  }
 }
 
 extern "C" JNIEXPORT void JNICALL
