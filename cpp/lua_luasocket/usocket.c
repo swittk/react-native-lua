@@ -12,6 +12,7 @@
 #include "pierror.h"
 #include "RuntimeSocketHooks.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #ifdef MSG_NOSIGNAL
@@ -429,11 +430,63 @@ int socket_gethostbyaddr(const char *addr, socklen_t len, struct hostent **hp) {
 }
 
 int socket_gethostbyname(const char *addr, struct hostent **hp) {
-    *hp = gethostbyname(addr);
-    if (*hp) return IO_DONE;
-    else if (h_errno) return h_errno;
-    else if (errno) return errno;
-    else return IO_UNKNOWN;
+    enum { RNLUA_MAX_HOST_ADDRESSES = 32 };
+    static _Thread_local struct hostent resolved_host;
+    static _Thread_local char resolved_name[NI_MAXHOST];
+    static _Thread_local struct in_addr resolved_addresses[RNLUA_MAX_HOST_ADDRESSES];
+    static _Thread_local char *resolved_address_list[RNLUA_MAX_HOST_ADDRESSES + 1];
+    static _Thread_local char *resolved_aliases[1];
+
+    struct addrinfo hints, *resolved = NULL, *iterator = NULL;
+    int gai_error, count = 0;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_CANONNAME;
+
+    gai_error = rnlua_socket_getaddrinfo(addr, NULL, &hints, &resolved);
+    rnlua_socket_check_interrupt();
+    if (gai_error != 0) {
+        if (resolved) freeaddrinfo(resolved);
+        switch (gai_error) {
+            case EAI_AGAIN: return TRY_AGAIN;
+            case EAI_NONAME: return HOST_NOT_FOUND;
+            default: return NO_RECOVERY;
+        }
+    }
+
+    snprintf(
+        resolved_name,
+        sizeof(resolved_name),
+        "%s",
+        resolved && resolved->ai_canonname ? resolved->ai_canonname : addr);
+    resolved_aliases[0] = NULL;
+
+    for (iterator = resolved;
+         iterator && count < RNLUA_MAX_HOST_ADDRESSES;
+         iterator = iterator->ai_next) {
+        if (iterator->ai_family != AF_INET ||
+            iterator->ai_addrlen < sizeof(struct sockaddr_in)) {
+            continue;
+        }
+        resolved_addresses[count] =
+            ((struct sockaddr_in *) iterator->ai_addr)->sin_addr;
+        resolved_address_list[count] = (char *) &resolved_addresses[count];
+        count++;
+    }
+    resolved_address_list[count] = NULL;
+    freeaddrinfo(resolved);
+
+    if (count == 0) return HOST_NOT_FOUND;
+
+    memset(&resolved_host, 0, sizeof(resolved_host));
+    resolved_host.h_name = resolved_name;
+    resolved_host.h_aliases = resolved_aliases;
+    resolved_host.h_addrtype = AF_INET;
+    resolved_host.h_length = sizeof(struct in_addr);
+    resolved_host.h_addr_list = resolved_address_list;
+    *hp = &resolved_host;
+    return IO_DONE;
 }
 
 /*-------------------------------------------------------------------------*\

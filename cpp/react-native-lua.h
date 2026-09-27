@@ -1,166 +1,90 @@
-#ifndef SKRNNATIVELUA_H
-#define SKRNNATIVELUA_H
+#ifndef REACT_NATIVE_LUA_H
+#define REACT_NATIVE_LUA_H
 
-#include <memory>
-#include <jsi/jsi.h>
+#include "LuaRuntime.h"
+
+#include <atomic>
+#include <cstdint>
 #include <deque>
-extern "C" {
-#include <setjmp.h>
-}
+#include <functional>
+#include <memory>
 #include <mutex>
-#include <map>
-#include <queue>
+#include <string>
 #include <thread>
+#include <vector>
 
-//#include "luaSrc/lua.h"
+#include <jsi/jsi.h>
 
 namespace facebook {
-namespace jsi {
-class Runtime;
-}
 namespace react {
 class CallInvoker;
 }
-}
-struct lua_State;
+} // namespace facebook
 
 namespace SKRNNativeLua {
-  int multiply(float a, float b);
 
-class SKRNLuaMTHelper {
-public:
-    std::mutex mutex;
-    
-    std::map<int, void *>conveniencePointers;
-//    int hid;
-//    SKRNLuaMTHelper() {
-//        count++;
-//        hid = count;
-//        printf("alloc mthelper %d", hid);
-//    }
-//    SKRNLuaMTHelper (const SKRNLuaMTHelper &c) : mutex(), hid(count++)
-//    {
-//        printf("copy mthelper %d", hid);
-//    }
-//    ~SKRNLuaMTHelper() {
-//        printf("dealloc mthelper %d", hid);
-//    }
-//    void bark() {
-//        printf("woof %d", hid);
-//    }
+int multiply(float a, float b);
+
+/**
+ * JSI HostObject that owns one isolated Lua state. The same class is installed
+ * by the legacy bridge adapters and the New Architecture binding installers.
+ */
+class SKRNLuaInterpreter final
+    : public facebook::jsi::HostObject,
+      public std::enable_shared_from_this<SKRNLuaInterpreter> {
+ public:
+  SKRNLuaInterpreter(
+      std::shared_ptr<facebook::react::CallInvoker> callInvoker,
+      rnlua::InterpreterOptions options = {});
+  ~SKRNLuaInterpreter() override;
+
+  int doString(const std::string& source);
+  int doFile(const std::string& path);
+  std::string getLatestError() const;
+
+  /** Installs an explicitly granted native capability before script execution. */
+  void withState(const std::function<void(lua_State*)>& callback);
+
+  facebook::jsi::Value get(
+      facebook::jsi::Runtime& runtime,
+      const facebook::jsi::PropNameID& name) override;
+  std::vector<facebook::jsi::PropNameID> getPropertyNames(
+      facebook::jsi::Runtime& runtime) override;
+
+ private:
+  struct AsyncResult {
+    std::uint64_t taskId;
+    rnlua::ExecutionResult result;
+  };
+
+  std::uint64_t startAsync(const std::string& source, bool isFile);
+  bool takeAsyncResult(std::uint64_t taskId, rnlua::ExecutionResult& result);
+  void joinCompletedWorker();
+  void shutdown() noexcept;
+  void runProtectedStateOperation(
+      facebook::jsi::Runtime& runtime,
+      rnlua::LuaRuntime::ProtectedStateOperation operation,
+      void* context);
+
+
+  std::unique_ptr<rnlua::LuaRuntime> lua_;
+  lua_State* state_ = nullptr;
+  std::atomic<bool> executing_{false};
+  std::atomic<bool> destroyed_{false};
+  std::atomic<std::uint64_t> nextTaskId_{1};
+  std::thread worker_;
+  std::mutex resultMutex_;
+  std::deque<AsyncResult> asyncResults_;
 };
 
+/** Installs the interpreter factory into the supplied React Native runtime. */
+void install(
+    facebook::jsi::Runtime& runtime,
+    std::shared_ptr<facebook::react::CallInvoker> callInvoker);
 
-// Heavy, heavy thanks to this answer for this solution. https://stackoverflow.com/a/48816876/4469172
-class AsyncThreadQueuer {
-public:
-    std::mutex m_mutex;
-    std::queue<std::function<void()>>m_queue;
-    std::condition_variable m_condition;
-    std::atomic<bool> m_exitCondition;
-    int m_numJobs = 0;
-    
-    // called by main thread
-    void AddJob(std::function<void()> f)
-    {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_queue.push(std::move(f));
-            ++m_numJobs;
-        }
-        m_condition.notify_one();  // It's good style to call notify_one when not holding the lock.
-    }
+/** Removes the interpreter factory during legacy bridge invalidation. */
+void cleanup(facebook::jsi::Runtime& runtime);
 
-    void worker_main()
-    {
-        while(!m_exitCondition)
-            doJob();
-    }
-    void signalTerminateJobs() {
-        m_exitCondition = true;
-        m_condition.notify_one();
-    }
-private:
-    void doJob()
-    {
-        std::function<void()> f;
-        {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            while (m_numJobs == 0 && !m_exitCondition)
-                m_condition.wait(lock);
+} // namespace SKRNNativeLua
 
-            if (m_exitCondition)
-                return;
-            f = std::move(m_queue.front());
-            m_queue.pop();
-            --m_numJobs;
-        }
-        f();
-    }
-};
-
-class SKRNLuaInterpreter : public facebook::jsi::HostObject {
-public:
-    jmp_buf place;
-    lua_State *_state;
-    
-    bool valid = true;
-    bool shouldTerminate = false;
-    long long executionLimitMilliseconds = 10000;
-    
-    std::shared_ptr<facebook::react::CallInvoker> callInvoker;
-    std::mutex printOutputMutex;
-    std::deque<std::string> printOutput;
-    int maxPrintOutputCount = 1000;
-    
-    std::atomic<bool> executing;
-    
-    std::thread asyncProcessingThread;
-    AsyncThreadQueuer asyncThreadQueuer;
-        
-#pragma mark - LifeCycle Methods
-    SKRNLuaInterpreter(std::shared_ptr<facebook::react::CallInvoker> _callInvoker) : callInvoker(_callInvoker) {
-        executing = false;
-        // TODO: Uncomment this when finally implementing do___async functions with asyncProcessingThread
-//        asyncProcessingThread = std::thread([&]() {
-//            asyncThreadQueuer.worker_main();
-//        });
-        printf("\nallocated addresss %lld", (long long)this);
-        createState();
-    }
-    ~SKRNLuaInterpreter() {
-        shouldTerminate = true;
-        // TODO: Uncomment this when finally implementing do___async functions with asyncProcessingThread
-//        asyncThreadQueuer.signalTerminateJobs();
-//        printf("attempting to join for instance %lld", (long long)this);
-//        asyncProcessingThread.join();
-        printf("\ndeallocate addresss %lld", (long long)this);
-        closeStateIfNeeded();
-    }
-    void createState();
-    void closeStateIfNeeded();
-#pragma mark - Interaction Methods
-    /**
-     * Loads and runs the given string. It is defined as the following macro:
-     * (luaL_loadstring(L, str) || lua_pcall(L, 0, LUA_MULTRET, 0)).
-     * @returns result code, LUA_OK if ok. (returns 0 if there are no errors or 1 in case of errors)
-     */
-    int doString(std::string str);
-    int doFile(std::string filePath);
-    std::string getLatestError();
-    static int staticLuaPrintHandler(lua_State *L);
-    void luaPrintHandler(std::string str);
-#pragma mark - Helper Methods
-    
-    
-#pragma mark - JSI Compliance methods
-    facebook::jsi::Value get(facebook::jsi::Runtime &runtime, const facebook::jsi::PropNameID &name);
-    std::vector<facebook::jsi::PropNameID> getPropertyNames(facebook::jsi::Runtime& rt);
-};
-
-void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
-//void install(facebook::jsi::Runtime &jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> invoker);
-void cleanup(facebook::jsi::Runtime &jsiRuntime);
-}
-
-#endif /* SKRNNATIVELUA_H */
+#endif // REACT_NATIVE_LUA_H

@@ -92,7 +92,7 @@ static int inet_global_getnameinfo(lua_State *L) {
     hints.ai_family = AF_UNSPEC;
 
     rnlua_socket_check_interrupt();
-    ret = getaddrinfo(host, serv, &hints, &resolved);
+    ret = rnlua_socket_getaddrinfo(host, serv, &hints, &resolved);
     rnlua_socket_check_interrupt();
     if (ret != 0) {
         lua_pushnil(L);
@@ -166,7 +166,7 @@ static int inet_global_getaddrinfo(lua_State *L)
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_family = AF_UNSPEC;
     rnlua_socket_check_interrupt();
-    ret = getaddrinfo(hostname, NULL, &hints, &resolved);
+    ret = rnlua_socket_getaddrinfo(hostname, NULL, &hints, &resolved);
     rnlua_socket_check_interrupt();
     if (ret != 0) {
         lua_pushnil(L);
@@ -398,7 +398,7 @@ const char *inet_tryconnect(p_socket ps, int *family, const char *address,
     int current_family = *family;
     /* try resolving */
     rnlua_socket_check_interrupt();
-    err = socket_gaistrerror(getaddrinfo(address, serv,
+    err = socket_gaistrerror(rnlua_socket_getaddrinfo(address, serv,
                 connecthints, &resolved));
     rnlua_socket_check_interrupt();
     if (err != NULL) {
@@ -464,7 +464,7 @@ const char *inet_trybind(p_socket ps, int *family, const char *address,
     if (!serv) serv = "0";
     /* try resolving */
     rnlua_socket_check_interrupt();
-    err = socket_gaistrerror(getaddrinfo(address, serv, bindhints, &resolved));
+    err = socket_gaistrerror(rnlua_socket_getaddrinfo(address, serv, bindhints, &resolved));
     rnlua_socket_check_interrupt();
     if (err) {
         if (resolved) freeaddrinfo(resolved);
