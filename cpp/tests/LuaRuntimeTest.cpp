@@ -19,6 +19,10 @@ void protectedFailure(lua_State* state, void*) {
   luaL_error(state, "protected stack failure");
 }
 
+void protectedGetMissing(lua_State* state, void*) {
+  lua_getglobal(state, "__rnlua_missing_key");
+}
+
 void require(bool condition, const std::string& message) {
   if (!condition) {
     std::cerr << "FAIL: " << message << '\n';
@@ -219,6 +223,39 @@ int main() {
     }
     require(threw,
             "protected stack operations must translate Lua errors instead of aborting");
+  }
+
+  {
+    rnlua::InterpreterOptions options;
+    options.executionLimitMs = 20;
+    rnlua::LuaRuntime runtime(options);
+    require(
+        runtime.executeString(
+            "setmetatable(_G, {__index = function() while true do end end})")
+                .code == 0,
+        "metamethod deadline fixture must install");
+
+    bool deadlineThrew = false;
+    try {
+      runtime.runProtectedStateOperation(&protectedGetMissing, nullptr, 20);
+    } catch (const std::exception& error) {
+      deadlineThrew =
+          std::string(error.what()).find("deadline") != std::string::npos;
+    }
+    require(
+        deadlineThrew,
+        "protected metamethod calls must surface their execution deadline");
+
+    runtime.withState([](lua_State* state) {
+      lua_pushglobaltable(state);
+      lua_pushnil(state);
+      lua_setmetatable(state, -2);
+      lua_pop(state, 1);
+    });
+    const auto after = runtime.executeString("while true do end");
+    require(
+        after.code == rnlua::kDeadlineExceeded,
+        "protected-call failures must restore Lua call frames and hook state");
   }
 
   {

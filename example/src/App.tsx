@@ -112,6 +112,9 @@ export default function App() {
       lifecycleBackgrounded.current = false;
       setLifecycleStatus(`running ${seconds}s`);
       interpreter.dostringasync(lifecycleSmokeSource(seconds), (code) => {
+        if (__interpreter.current !== interpreter) {
+          return;
+        }
         lifecycleRunning.current = false;
         setLifecycleStatus(
           `result ${code}${lifecycleBackgrounded.current ? ' after background' : ''}`,
@@ -174,8 +177,11 @@ export default function App() {
       <Text>Native multiply smoke test: {result ?? 'loading'} (expected 21)</Text>
       <Text accessibilityLabel='Lifecycle status'>Lifecycle smoke: {lifecycleStatus}</Text>
       <Button accessibilityLabel='Reload New Interpreter' title='Reload New Interpreter' onPress={() => {
+        lifecycleRunning.current = false;
+        lifecycleBackgrounded.current = false;
         __interpreter.current?.destroy();
         __interpreter.current = createInterpreter();
+        setLifecycleStatus('idle');
       }} />
       <Button
         accessibilityLabel='Lifecycle 10s'

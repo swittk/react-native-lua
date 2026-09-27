@@ -799,7 +799,7 @@
 					"$(inherited)",
 					" ",
 				);
-				REACT_NATIVE_PATH = "${PODS_ROOT}/../../../node_modules/.pnpm/react-native@0.73.6_@babel+core@7.29.7_@babel+preset-env@7.29.7_@babel+core@7.29.7__react@18.2.0/node_modules/react-native";
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
 				USE_HERMES = true;
 			};
@@ -860,7 +860,7 @@
 					"$(inherited)",
 					" ",
 				);
-				REACT_NATIVE_PATH = "${PODS_ROOT}/../../../node_modules/.pnpm/react-native@0.73.6_@babel+core@7.29.7_@babel+preset-env@7.29.7_@babel+core@7.29.7__react@18.2.0/node_modules/react-native";
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
 				USE_HERMES = true;
 				VALIDATE_PRODUCT = YES;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -102,6 +103,67 @@ jsi::Object executionResultObject(
   return value;
 }
 
+constexpr double kMaxSafeJsInteger = 9'007'199'254'740'991.0;
+
+int requireJsInt(
+    jsi::Runtime& runtime,
+    const jsi::Value& value,
+    const char* description) {
+  if (!value.isNumber()) {
+    throw jsi::JSError(runtime, std::string("Expected numeric ") + description);
+  }
+  const double number = value.asNumber();
+  if (!std::isfinite(number) || std::trunc(number) != number ||
+      number < static_cast<double>(std::numeric_limits<int>::min()) ||
+      number > static_cast<double>(std::numeric_limits<int>::max())) {
+    throw jsi::JSError(
+        runtime, std::string("Invalid integer ") + description);
+  }
+  return static_cast<int>(number);
+}
+
+lua_Integer requireJsLuaInteger(
+    jsi::Runtime& runtime,
+    const jsi::Value& value,
+    const char* description) {
+  if (!value.isNumber()) {
+    throw jsi::JSError(runtime, std::string("Expected numeric ") + description);
+  }
+  const double number = value.asNumber();
+  if (!std::isfinite(number) || std::trunc(number) != number ||
+      number < -kMaxSafeJsInteger || number > kMaxSafeJsInteger ||
+      number < static_cast<double>(std::numeric_limits<lua_Integer>::min()) ||
+      number > static_cast<double>(std::numeric_limits<lua_Integer>::max())) {
+    throw jsi::JSError(
+        runtime, std::string("Invalid Lua integer ") + description);
+  }
+  return static_cast<lua_Integer>(number);
+}
+
+std::size_t requireJsCount(
+    jsi::Runtime& runtime,
+    const jsi::Value& value,
+    const char* description) {
+  if (!value.isNumber()) {
+    throw jsi::JSError(runtime, std::string("Expected numeric ") + description);
+  }
+  const double number = value.asNumber();
+  if (!std::isfinite(number) || std::trunc(number) != number ||
+      number < 0.0 || number > kMaxSafeJsInteger ||
+      number > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
+    throw jsi::JSError(
+        runtime, std::string("Invalid non-negative count ") + description);
+  }
+  return static_cast<std::size_t>(number);
+}
+
+std::uint64_t requireJsTaskId(
+    jsi::Runtime& runtime,
+    const jsi::Value& value) {
+  const std::size_t id = requireJsCount(runtime, value, "task id");
+  return static_cast<std::uint64_t>(id);
+}
+
 enum class StackOperationKind {
   PushBoolean,
   PushInteger,
@@ -127,7 +189,7 @@ enum class StackOperationKind {
   ToNumber,
   ToString,
   ToPointer,
-  ToThread,
+  ToThreadHandle,
   Type,
   RawEqual,
   RawGetI,
@@ -140,6 +202,7 @@ enum class StackOperationKind {
   GetGlobal,
   VarAsNumber,
   StringToNumber,
+  ResumeThread,
 };
 
 struct StackOperationContext {
@@ -150,18 +213,52 @@ struct StackOperationContext {
   const char* text = nullptr;
   std::size_t textSize = 0;
   int intResult = 0;
+  int resultCount = 0;
   lua_Integer integerResult = 0;
   lua_Number numberResult = 0;
   std::size_t sizeResult = 0;
   const char* textResult = nullptr;
   std::size_t textResultSize = 0;
   const void* pointerResult = nullptr;
-  lua_State* threadResult = nullptr;
 };
 
 void requireLuaStack(lua_State* state, int slots) {
-  if (!lua_checkstack(state, slots)) {
+  if (slots < 0 || !lua_checkstack(state, slots)) {
     luaL_error(state, "Lua stack limit exceeded");
+  }
+}
+
+void requireStackElements(lua_State* state, int count) {
+  if (count < 0 || lua_gettop(state) < count) {
+    luaL_error(state, "Lua stack underflow");
+  }
+}
+
+bool isValueIndex(lua_State* state, int index) {
+  const int top = lua_gettop(state);
+  return index == LUA_REGISTRYINDEX ||
+      (index > 0 && index <= top) ||
+      (index < 0 && index >= -top);
+}
+
+void requireValueIndex(lua_State* state, int index) {
+  if (!isValueIndex(state, index)) {
+    luaL_error(state, "invalid Lua stack index %d", index);
+  }
+}
+
+void requireActualStackIndex(lua_State* state, int index) {
+  const int top = lua_gettop(state);
+  if (!((index > 0 && index <= top) ||
+        (index < 0 && index >= -top))) {
+    luaL_error(state, "invalid Lua stack index %d", index);
+  }
+}
+
+void requireTableIndex(lua_State* state, int index) {
+  requireValueIndex(state, index);
+  if (lua_type(state, index) != LUA_TTABLE) {
+    luaL_error(state, "Lua table expected at index %d", index);
   }
 }
 
@@ -197,89 +294,155 @@ void performStackOperation(lua_State* state, void* rawContext) {
       context->intResult = lua_pushthread(state);
       return;
     case StackOperationKind::PushValue:
+      requireValueIndex(state, context->first);
       requireLuaStack(state, 1);
       lua_pushvalue(state, context->first);
       return;
     case StackOperationKind::RawGet:
+      requireStackElements(state, 1);
+      requireTableIndex(state, context->first);
       context->intResult = lua_rawget(state, context->first);
       return;
     case StackOperationKind::RawLen:
+      requireValueIndex(state, context->first);
       context->sizeResult = lua_rawlen(state, context->first);
       return;
     case StackOperationKind::RawSet:
+      requireStackElements(state, 2);
+      requireTableIndex(state, context->first);
       lua_rawset(state, context->first);
       return;
     case StackOperationKind::Remove:
+      requireActualStackIndex(state, context->first);
       lua_remove(state, context->first);
       return;
     case StackOperationKind::Insert:
+      requireActualStackIndex(state, context->first);
       lua_insert(state, context->first);
       return;
     case StackOperationKind::Replace:
+      requireStackElements(state, 1);
+      requireActualStackIndex(state, context->first);
       lua_replace(state, context->first);
       return;
-    case StackOperationKind::SetMetatable:
+    case StackOperationKind::SetMetatable: {
+      requireStackElements(state, 1);
+      requireValueIndex(state, context->first);
+      const int metatableType = lua_type(state, -1);
+      if (metatableType != LUA_TNIL && metatableType != LUA_TTABLE) {
+        luaL_error(state, "metatable must be a table or nil");
+      }
       context->intResult = lua_setmetatable(state, context->first);
       return;
+    }
     case StackOperationKind::SetTable:
+      requireStackElements(state, 2);
+      requireValueIndex(state, context->first);
       lua_settable(state, context->first);
       return;
-    case StackOperationKind::SetTop:
+    case StackOperationKind::SetTop: {
+      const int top = lua_gettop(state);
+      if (context->first >= 0) {
+        requireLuaStack(state, std::max(0, context->first - top));
+      } else if (context->first < -(top + 1)) {
+        luaL_error(state, "invalid Lua stack top %d", context->first);
+      }
       lua_settop(state, context->first);
       return;
+    }
     case StackOperationKind::GetTable:
+      requireStackElements(state, 1);
+      requireValueIndex(state, context->first);
       context->intResult = lua_gettable(state, context->first);
       return;
     case StackOperationKind::ToBoolean:
+      requireValueIndex(state, context->first);
       context->intResult = lua_toboolean(state, context->first);
       return;
     case StackOperationKind::ToClose:
+      requireActualStackIndex(state, context->first);
       lua_toclose(state, context->first);
       return;
     case StackOperationKind::ToInteger:
+      requireValueIndex(state, context->first);
       context->integerResult = lua_tointeger(state, context->first);
       return;
     case StackOperationKind::ToNumber:
+      requireValueIndex(state, context->first);
       context->numberResult = lua_tonumber(state, context->first);
       return;
     case StackOperationKind::ToString:
+      requireValueIndex(state, context->first);
       context->textResult =
           lua_tolstring(state, context->first, &context->textResultSize);
       return;
     case StackOperationKind::ToPointer:
+      requireValueIndex(state, context->first);
       context->pointerResult = lua_topointer(state, context->first);
       return;
-    case StackOperationKind::ToThread:
-      context->threadResult = lua_tothread(state, context->first);
+    case StackOperationKind::ToThreadHandle:
+      requireValueIndex(state, context->first);
+      if (lua_type(state, context->first) != LUA_TTHREAD) {
+        luaL_error(state, "Lua thread expected at index %d", context->first);
+      }
+      requireLuaStack(state, 1);
+      lua_pushvalue(state, context->first);
+      context->intResult = luaL_ref(state, LUA_REGISTRYINDEX);
       return;
     case StackOperationKind::Type:
+      requireValueIndex(state, context->first);
       context->intResult = lua_type(state, context->first);
       return;
     case StackOperationKind::RawEqual:
+      requireValueIndex(state, context->first);
+      requireValueIndex(state, static_cast<int>(context->second));
       context->intResult =
           lua_rawequal(state, context->first, static_cast<int>(context->second));
       return;
     case StackOperationKind::RawGetI:
+      requireTableIndex(state, context->first);
       requireLuaStack(state, 1);
       context->intResult = lua_rawgeti(state, context->first, context->second);
       return;
     case StackOperationKind::RawSetI:
+      requireStackElements(state, 1);
+      requireTableIndex(state, context->first);
       lua_rawseti(state, context->first, context->second);
       return;
-    case StackOperationKind::Rotate:
-      lua_rotate(state, context->first, static_cast<int>(context->second));
+    case StackOperationKind::Rotate: {
+      requireActualStackIndex(state, context->first);
+      const int amount = static_cast<int>(context->second);
+      const int top = lua_gettop(state);
+      const int segmentLength =
+          context->first > 0 ? top - context->first + 1 : -context->first;
+      const long long amount64 = static_cast<long long>(amount);
+      if (amount64 > segmentLength || amount64 < -segmentLength) {
+        luaL_error(state, "invalid Lua rotation amount %d", amount);
+      }
+      lua_rotate(state, context->first, amount);
       return;
+    }
     case StackOperationKind::SetI:
+      requireStackElements(state, 1);
+      requireValueIndex(state, context->first);
       lua_seti(state, context->first, context->second);
       return;
     case StackOperationKind::SetIUserValue:
+      requireStackElements(state, 1);
+      requireActualStackIndex(state, context->first);
+      if (lua_type(state, context->first) != LUA_TUSERDATA) {
+        luaL_error(state, "full userdata expected at index %d", context->first);
+      }
       context->intResult =
           lua_setiuservalue(state, context->first, static_cast<int>(context->second));
       return;
     case StackOperationKind::SetField:
+      requireStackElements(state, 1);
+      requireValueIndex(state, context->first);
       lua_setfield(state, context->first, context->text);
       return;
     case StackOperationKind::SetGlobal:
+      requireStackElements(state, 1);
       lua_setglobal(state, context->text);
       return;
     case StackOperationKind::GetGlobal:
@@ -297,6 +460,46 @@ void performStackOperation(lua_State* state, void* rawContext) {
       requireLuaStack(state, 1);
       context->sizeResult = lua_stringtonumber(state, context->text);
       return;
+    case StackOperationKind::ResumeThread: {
+      const int argumentCount = static_cast<int>(context->second);
+      if (context->first <= 0 || argumentCount < 0) {
+        luaL_error(state, "invalid Lua thread handle or argument count");
+      }
+      requireStackElements(state, argumentCount);
+      requireLuaStack(state, 1);
+      const int type =
+          lua_rawgeti(state, LUA_REGISTRYINDEX, context->first);
+      if (type != LUA_TTHREAD) {
+        lua_pop(state, 1);
+        luaL_error(state, "invalid or expired Lua thread handle");
+      }
+      lua_State* thread = lua_tothread(state, -1);
+      lua_pop(state, 1);
+      if (thread == nullptr || thread == state) {
+        luaL_error(state, "coroutine thread expected");
+      }
+      if (!lua_checkstack(thread, argumentCount)) {
+        luaL_error(state, "Lua coroutine stack limit exceeded");
+      }
+      if (argumentCount > 0) {
+        lua_xmove(state, thread, argumentCount);
+      }
+
+      int resultCount = 0;
+      const int code =
+          lua_resume(thread, state, argumentCount, &resultCount);
+      context->intResult = code;
+      context->resultCount = resultCount;
+
+      if (resultCount > 0) {
+        requireLuaStack(state, resultCount);
+        lua_xmove(thread, state, resultCount);
+      }
+      if (code != LUA_YIELD) {
+        luaL_unref(state, LUA_REGISTRYINDEX, context->first);
+      }
+      return;
+    }
   }
 }
 
@@ -514,9 +717,8 @@ jsi::Value SKRNLuaInterpreter::get(
     return makeHostFunction(runtime, name, 1, [self](
         jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* arguments,
         std::size_t count) -> jsi::Value {
-      const std::size_t requested = count > 0 && arguments[0].isNumber()
-          ? static_cast<std::size_t>(std::max(0.0, arguments[0].asNumber()))
-          : 0;
+      const std::size_t requested =
+          count > 0 ? requireJsCount(runtime, arguments[0], "print count") : 0;
       return jsi::String::createFromUtf8(runtime, self->lua_->takeOutput(requested));
     });
   }
@@ -588,12 +790,12 @@ jsi::Value SKRNLuaInterpreter::get(
     return makeHostFunction(runtime, name, 1, [self](
         jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* arguments,
         std::size_t count) -> jsi::Value {
-      if (count < 1 || !arguments[0].isNumber()) {
+      if (count < 1) {
         throw jsi::JSError(runtime, "Expected an async task id");
       }
+      const std::uint64_t taskId = requireJsTaskId(runtime, arguments[0]);
       rnlua::ExecutionResult result;
-      if (!self->takeAsyncResult(
-              static_cast<std::uint64_t>(arguments[0].asNumber()), result)) {
+      if (!self->takeAsyncResult(taskId, result)) {
         return jsi::Value::null();
       }
       return executionResultObject(runtime, result);
@@ -647,11 +849,14 @@ jsi::Value SKRNLuaInterpreter::get(
 
   if (method == "pop") {
     return makeHostFunction(runtime, name, 1, [self](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
-      if (n < 1 || !a[0].isNumber()) throw jsi::JSError(runtime, "Expected count");
+      if (n < 1) throw jsi::JSError(runtime, "Expected count");
+      const int count = requireJsInt(runtime, a[0], "pop count");
+      if (count < 0) {
+        throw jsi::JSError(runtime, "Pop count must be non-negative");
+      }
       StackOperationContext operation{StackOperationKind::SetTop};
-      const int count = static_cast<int>(a[0].asNumber());
       const int top = self->state_ == nullptr ? 0 : lua_gettop(self->state_);
-      operation.first = std::max(0, top - std::max(0, count));
+      operation.first = std::max(0, top - count);
       self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       return jsi::Value::undefined();
     });
@@ -663,9 +868,12 @@ jsi::Value SKRNLuaInterpreter::get(
           method == "pushboolean" ? StackOperationKind::PushBoolean
           : method == "pushinteger" ? StackOperationKind::PushInteger
                                     : StackOperationKind::PushNumber};
-      operation.first = a[0].asNumber() != 0 ? 1 : 0;
-      operation.second = static_cast<lua_Integer>(a[0].asNumber());
-      operation.number = a[0].asNumber();
+      const double number = a[0].asNumber();
+      operation.first = number != 0 ? 1 : 0;
+      operation.second = method == "pushinteger"
+          ? requireJsLuaInteger(runtime, a[0], "value")
+          : 0;
+      operation.number = number;
       self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       return jsi::Value::undefined();
     });
@@ -722,15 +930,16 @@ jsi::Value SKRNLuaInterpreter::get(
         method == "tonumber" ? StackOperationKind::ToNumber :
         method == "tostring" ? StackOperationKind::ToString :
         method == "topointer" ? StackOperationKind::ToPointer :
-        method == "tothread" ? StackOperationKind::ToThread :
+        method == "tothread" ? StackOperationKind::ToThreadHandle :
                                StackOperationKind::Type;
     return makeHostFunction(runtime, name, 1, [self, method, kind](
         jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a,
         std::size_t n) -> jsi::Value {
-      const int index =
-          n > 0 && a[0].isNumber() ? static_cast<int>(a[0].asNumber()) : -1;
+      if (n < 1) {
+        throw jsi::JSError(runtime, "Expected stack index");
+      }
       StackOperationContext operation{kind};
-      operation.first = index;
+      operation.first = requireJsInt(runtime, a[0], "stack index");
       self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       if (method == "rawget" || method == "setmetatable" ||
           method == "gettable" || method == "toboolean" ||
@@ -758,8 +967,7 @@ jsi::Value SKRNLuaInterpreter::get(
             reinterpret_cast<std::uintptr_t>(operation.pointerResult)));
       }
       if (method == "tothread") {
-        return jsi::Value(static_cast<double>(
-            reinterpret_cast<std::uintptr_t>(operation.threadResult)));
+        return jsi::Value(static_cast<double>(operation.intResult));
       }
       return jsi::Value::undefined();
     });
@@ -776,12 +984,19 @@ jsi::Value SKRNLuaInterpreter::get(
     return makeHostFunction(runtime, name, 2, [self, method, kind](
         jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a,
         std::size_t n) -> jsi::Value {
-      if (n < 2 || !a[0].isNumber() || !a[1].isNumber()) {
-        throw jsi::JSError(runtime, "Expected two numbers");
+      if (n < 2) {
+        throw jsi::JSError(runtime, "Expected two numeric arguments");
       }
       StackOperationContext operation{kind};
-      operation.first = static_cast<int>(a[0].asNumber());
-      operation.second = static_cast<lua_Integer>(a[1].asNumber());
+      operation.first = requireJsInt(runtime, a[0], "stack index");
+      if (method == "rawequal" || method == "rotate" ||
+          method == "setiuservalue") {
+        operation.second =
+            requireJsInt(runtime, a[1], "stack index/slot/rotation");
+      } else {
+        operation.second =
+            requireJsLuaInteger(runtime, a[1], "Lua integer key");
+      }
       self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       if (method == "rawequal" || method == "rawgeti" ||
           method == "setiuservalue") {
@@ -794,12 +1009,12 @@ jsi::Value SKRNLuaInterpreter::get(
     return makeHostFunction(runtime, name, 2, [self](
         jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a,
         std::size_t n) {
-      if (n < 2 || !a[0].isNumber() || !a[1].isString()) {
+      if (n < 2 || !a[1].isString()) {
         throw jsi::JSError(runtime, "Expected index and field");
       }
       const std::string key = a[1].asString(runtime).utf8(runtime);
       StackOperationContext operation{StackOperationKind::SetField};
-      operation.first = static_cast<int>(a[0].asNumber());
+      operation.first = requireJsInt(runtime, a[0], "stack index");
       operation.text = key.c_str();
       self->runProtectedStateOperation(runtime, &performStackOperation, &operation);
       return jsi::Value::undefined();
@@ -833,8 +1048,12 @@ jsi::Value SKRNLuaInterpreter::get(
   }
   if (method == "typename") {
     return makeHostFunction(runtime, name, 1, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) {
-      if (n < 1 || !a[0].isNumber()) throw jsi::JSError(runtime, "Expected type number");
-      return jsi::String::createFromUtf8(runtime, lua_typename(state(), static_cast<int>(a[0].asNumber())));
+      if (n < 1) throw jsi::JSError(runtime, "Expected type number");
+      const int type = requireJsInt(runtime, a[0], "Lua type");
+      if (type < LUA_TNONE || type >= LUA_NUMTYPES) {
+        throw jsi::JSError(runtime, "Invalid Lua type number");
+      }
+      return jsi::String::createFromUtf8(runtime, lua_typename(state(), type));
     });
   }
   if (method == "gettop" || method == "status" || method == "resetthread") {
@@ -845,14 +1064,25 @@ jsi::Value SKRNLuaInterpreter::get(
     });
   }
   if (method == "resume") {
-    return makeHostFunction(runtime, name, 2, [state](jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a, std::size_t n) -> jsi::Value {
-      if (n < 2) throw jsi::JSError(runtime, "Expected thread handle and argument count");
-      auto* from = reinterpret_cast<lua_State*>(static_cast<std::uintptr_t>(a[0].asNumber()));
-      int results = 0;
-      const int code = lua_resume(state(), from, static_cast<int>(a[1].asNumber()), &results);
+    return makeHostFunction(runtime, name, 2, [self](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* a,
+        std::size_t n) -> jsi::Value {
+      if (n < 2) {
+        throw jsi::JSError(runtime, "Expected thread handle and argument count");
+      }
+      StackOperationContext operation{StackOperationKind::ResumeThread};
+      operation.first = requireJsInt(runtime, a[0], "thread handle");
+      const int argumentCount =
+          requireJsInt(runtime, a[1], "resume argument count");
+      if (argumentCount < 0) {
+        throw jsi::JSError(runtime, "Resume argument count must be non-negative");
+      }
+      operation.second = argumentCount;
+      self->runProtectedStateOperation(
+          runtime, &performStackOperation, &operation);
       jsi::Object value(runtime);
-      value.setProperty(runtime, "result", code);
-      value.setProperty(runtime, "nresults", results);
+      value.setProperty(runtime, "result", operation.intResult);
+      value.setProperty(runtime, "nresults", operation.resultCount);
       return value;
     });
   }

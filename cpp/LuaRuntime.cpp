@@ -16,6 +16,7 @@
 extern "C" {
 #include "lua_src/lauxlib.h"
 #include "lua_src/ldo.h"
+#include "lua_src/lstate.h"
 #include "lua_src/lua.h"
 #include "lua_src/lualib.h"
 }
@@ -528,7 +529,9 @@ void LuaRuntime::runProtectedStateOperation(
   activeDeadlineNs = &deadlineNs_;
   activeInterruptCode = &interruptCode_;
 
-  const int status = luaD_rawrunprotected(state_, operation, context);
+  const ptrdiff_t protectedTop = savestack(state_, state_->top.p);
+  const int status =
+      luaD_pcall(state_, operation, context, protectedTop, 0);
   const int interrupt = interruptCode_.load(std::memory_order_relaxed);
   std::string error;
   if (status != LUA_OK && lua_gettop(state_) > 0 &&
@@ -548,11 +551,7 @@ void LuaRuntime::runProtectedStateOperation(
   interruptCode_.store(previousInterrupt, std::memory_order_relaxed);
   lua_sethook(state_, &LuaRuntime::debugHook, LUA_MASKCOUNT, 1'000);
 
-  if (status == LUA_OK) {
-    return;
-  }
-
-  if (lua_gettop(state_) > originalTop) {
+  if (status != LUA_OK && lua_gettop(state_) > originalTop) {
     lua_settop(state_, originalTop);
   }
   if (interrupt == kCancelled) {
@@ -560,6 +559,9 @@ void LuaRuntime::runProtectedStateOperation(
   }
   if (interrupt == kDeadlineExceeded) {
     throw std::runtime_error("Lua stack operation exceeded its deadline");
+  }
+  if (status == LUA_OK) {
+    return;
   }
   throw std::runtime_error(
       error.empty() ? "Lua stack operation failed" : std::move(error));

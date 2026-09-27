@@ -81,16 +81,19 @@ When networking is enabled, `require` can resolve only compiled-in/preloaded
 modules. The global `package` table stays hidden, and filesystem and native
 dynamic module searchers are removed. Socket waits and `socket.sleep` are
 sliced so cancellation remains prompt and the interpreter deadline is
-enforced. OS DNS resolution is synchronous and cannot be preempted portably;
-the deadline/cancellation result is raised immediately after the resolver
-returns. Large UDP/Unix-datagram receive buffers use Lua's capped allocator.
+enforced. Blocking OS DNS resolution runs on a detached helper that owns copied
+resolver inputs and its result; the Lua execution thread polls cancellation and
+the deadline and may return before that helper finishes. Large UDP/Unix-datagram
+receive buffers use Lua's capped allocator.
 
 ## Security and resource boundaries
 
 New interpreters expose Lua's base, coroutine, table, string, math, and UTF-8
 libraries. `io`, `os`, `package`, and `debug` are not ambient globals.
-`dofile` is denied unless `allowFileSystem` is true, and bytecode is rejected
-unless `allowBytecode` is true.
+The native `dofile` / `executeFileResult` interpreter methods are denied unless
+`allowFileSystem` is true. The Lua global `dofile` remains unavailable even
+when file execution is enabled. Bytecode is rejected unless `allowBytecode`
+is true.
 
 The bundled Lua source removes `os.execute` and the other process/environment/
 filesystem-mutating OS functions. They remain absent even if a native

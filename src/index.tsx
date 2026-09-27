@@ -128,6 +128,7 @@ interface NativeLuaInterpreter {
   tonumber(index: number): number;
   tostring(index: number): string | null;
   topointer(index: number): number;
+  /** Returns an opaque, registry-backed handle suitable for resume(). */
   tothread(index: number): number;
   type(index?: number): LUA_TYPE;
   typename(type: number): string;
