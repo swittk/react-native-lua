@@ -1,6 +1,7 @@
 #include "../LuaValueReader.h"
 #include "../LuaValueWriter.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -128,6 +129,14 @@ int main() {
   check(pushed[2].kind == LuaValue::Kind::Null, "root null pushes Lua nil");
   lua_settop(L, originalTop);
 
+  pushLuaValues(rt, {number(3), number(-0.0), number(3.5), number(9007199254740992.0)});
+  check(lua_isinteger(L, originalTop + 1), "safe integral number pushes as Lua integer");
+  check(!lua_isinteger(L, originalTop + 2) && std::signbit(lua_tonumber(L, originalTop + 2)),
+        "negative zero remains a signed Lua float");
+  check(!lua_isinteger(L, originalTop + 3), "fractional number remains Lua float");
+  check(!lua_isinteger(L, originalTop + 4), "unsafe integral number remains Lua float");
+  lua_settop(L, originalTop);
+
   run(rt, R"lua(
     existing = 10
     removed = 11
@@ -171,6 +180,67 @@ int main() {
   globals = readLuaGlobals(rt, {"first_guard", "second_guard"});
   check(globals[0].number == 111 && globals[1].number == 222,
         "failed staged set changes no globals");
+
+  run(rt, "duplicate_guard=17");
+  rejectsRestoringStack(
+      rt,
+      [&] { setLuaGlobals(rt, {"duplicate_guard", "duplicate_guard"},
+                          {number(1), number(2)}); },
+      "duplicate");
+  check(readLuaGlobals(rt, {"duplicate_guard"})[0].number == 17,
+        "duplicate global names reject before mutation");
+
+  // Deterministically fail a Lua allocation after staging but during the
+  // failure-prone global insertion phase. Once the failpoint trips, every
+  // subsequent Lua allocation remains denied until the test clears it, so a
+  // rollback that allocates would fail too. The mixed deletion is deliberately
+  // deferred by the writer until all insertions have succeeded.
+  bool sawCommitFailure = false;
+  for (std::int64_t failAfter = 0; failAfter <= 128 && !sawCommitFailure; ++failAfter) {
+    LuaRuntime probeRuntime;
+    run(probeRuntime, R"lua(
+      rollback_victim = 123
+      rollback_keep = 456
+      rollback_names = {}
+      for i = 1, 255 do
+        rollback_names[i] = "rollback_insert_" .. i
+        _G["rollback_seed_" .. i] = i
+      end
+    )lua");
+    auto* probeState = probeRuntime.stateForAdvancedUse();
+    lua_pushstring(probeState, "stack-sentinel");
+    const int probeTop = lua_gettop(probeState);
+    std::vector<std::string> names = {"rollback_victim"};
+    std::vector<LuaValue> values = {LuaValue{}};
+    for (int i = 1; i <= 255; ++i) {
+      names.push_back("rollback_insert_" + std::to_string(i));
+      values.push_back(number(i));
+    }
+
+    probeRuntime.failAllocationsAfterForTesting(failAfter);
+    try {
+      setLuaGlobals(probeRuntime, names, values);
+      probeRuntime.clearAllocationFailureForTesting();
+      break;
+    } catch (const std::exception& error) {
+      probeRuntime.clearAllocationFailureForTesting();
+      if (std::string(error.what()).find("commit failed") != std::string::npos) {
+        sawCommitFailure = true;
+        check(lua_gettop(probeState) == probeTop, "commit failure restores stack identity");
+        const auto after = readLuaGlobals(
+            probeRuntime,
+            {"rollback_victim", "rollback_keep", "rollback_insert_1",
+             "rollback_insert_127", "rollback_insert_255"});
+        check(after[0].number == 123 && after[1].number == 456,
+              "commit failure preserves existing globals including deferred deletion");
+        check(after[2].kind == LuaValue::Kind::Null &&
+              after[3].kind == LuaValue::Kind::Null &&
+              after[4].kind == LuaValue::Kind::Null,
+              "commit failure removes all partially inserted globals");
+      }
+    }
+  }
+  check(sawCommitFailure, "commit-phase allocation failure exercised");
 
   ValueLimits depth;
   depth.maxDepth = 0;

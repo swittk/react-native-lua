@@ -191,11 +191,15 @@ Busy/destroyed interpreters reject every bulk transfer; nothing waits for or
 interrupts a running worker. Keep your existing per-interpreter execution queue
 around execution plus any related read/push/set operation.
 
-The supported subset is `null` (Lua nil), booleans, finite numbers, valid UTF-8
-strings, dense arrays and string-keyed maps. Maps have **null prototypes**, so
-`__proto__` is an ordinary data key. Functions, userdata, coroutines, cycles, mixed
-keys and sparse arrays are rejected. Shared acyclic tables are copied. Unsafe
-Lua integers are rejected instead of silently rounded.
+The transferable subset is `null` (Lua nil), booleans, finite numbers, valid UTF-8
+strings, dense arrays and string-keyed maps. Read maps have **null prototypes**, so
+`__proto__` is an ordinary data key. Host -> Lua object input accepts only plain
+objects with `Object.prototype` or `null` prototypes; `Map`, `Set`, typed arrays,
+class instances and other non-plain objects reject instead of silently losing data.
+Safe integral JS numbers become Lua integers; fractional/unsafe-integral values and
+negative zero remain Lua floats. Functions, userdata, coroutines, cycles, mixed
+keys and sparse arrays are rejected. Shared acyclic Lua tables are copied. Unsafe
+Lua integers are rejected by readers instead of silently rounded.
 
 Lua cannot distinguish an empty array from an empty map: `{}` becomes an object
 by default; pass `{emptyTables: 'array'}` to select arrays for empty tables.

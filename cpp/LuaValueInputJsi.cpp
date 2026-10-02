@@ -54,6 +54,8 @@ struct Parser {
   ValueLimits limits;
   jsi::Function objectKeys;
   jsi::Function objectSymbols;
+  jsi::Function objectGetPrototypeOf;
+  jsi::Object objectPrototype;
   std::vector<jsi::Value> ancestors;
   std::size_t entries = 0;
   std::size_t stringBytes = 0;
@@ -66,8 +68,23 @@ struct Parser {
                        .getPropertyAsFunction(runtime, "keys")),
         objectSymbols(runtime.global()
                           .getPropertyAsObject(runtime, "Object")
-                          .getPropertyAsFunction(runtime, "getOwnPropertySymbols")) {
+                          .getPropertyAsFunction(runtime, "getOwnPropertySymbols")),
+        objectGetPrototypeOf(runtime.global()
+                                 .getPropertyAsObject(runtime, "Object")
+                                 .getPropertyAsFunction(runtime, "getPrototypeOf")),
+        objectPrototype(runtime.global()
+                            .getPropertyAsObject(runtime, "Object")
+                            .getPropertyAsObject(runtime, "prototype")) {
     ancestors.reserve(limits.maxDepth);
+  }
+
+  void requirePlainObject(const jsi::Object& object) {
+    const auto prototype = objectGetPrototypeOf.call(rt, jsi::Value(rt, object));
+    if (prototype.isNull()) return;
+    if (!prototype.isObject() ||
+        !jsi::Object::strictEquals(rt, prototype.asObject(rt), objectPrototype)) {
+      invalid(rt, "only plain objects, null-prototype objects, and arrays are transferable");
+    }
   }
 
   void rejectSymbolKeys(const jsi::Object& object) {
@@ -157,8 +174,27 @@ struct Parser {
     enterObject(object, depth);
     try {
       if (object.isArray(rt)) {
+        rejectSymbolKeys(object);
         auto array = object.asArray(rt);
         const auto length = array.size(rt);
+        auto keyValue = objectKeys.call(rt, jsi::Value(rt, object));
+        if (!keyValue.isObject() || !keyValue.asObject(rt).isArray(rt)) {
+          invalid(rt, "Object.keys returned an invalid result");
+        }
+        auto keys = keyValue.asObject(rt).asArray(rt);
+        if (keys.size(rt) < length) {
+          invalid(rt, "sparse arrays are not transferable");
+        }
+        if (keys.size(rt) > length) {
+          invalid(rt, "arrays with extra enumerable properties are not transferable");
+        }
+        for (std::size_t i = 0; i < length; ++i) {
+          const auto keyValueAtIndex = keys.getValueAtIndex(rt, i);
+          if (!keyValueAtIndex.isString() ||
+              keyValueAtIndex.getString(rt).utf8(rt) != std::to_string(i)) {
+            invalid(rt, "arrays must contain only dense indexed elements");
+          }
+        }
         if (length > limits.maxEntries - entries) invalid(rt, "maxEntries exceeded");
         output.kind = LuaValue::Kind::Array;
         output.children.resize(length);
@@ -169,6 +205,7 @@ struct Parser {
           parse(child, output.children[i], depth + 1);
         }
       } else {
+        requirePlainObject(object);
         rejectSymbolKeys(object);
         auto keyValue = objectKeys.call(rt, jsi::Value(rt, object));
         if (!keyValue.isObject() || !keyValue.asObject(rt).isArray(rt)) {
@@ -262,15 +299,9 @@ ValueInputRequest parseValueInputRequest(
     if (object.isArray(rt) || object.isFunction(rt)) {
       invalid(rt, "setGlobals expects an object map");
     }
-    auto objectCtor = rt.global().getPropertyAsObject(rt, "Object");
-    auto symbolsFunction = objectCtor.getPropertyAsFunction(rt, "getOwnPropertySymbols");
-    auto symbolResult = symbolsFunction.call(rt, jsi::Value(rt, object));
-    if (!symbolResult.isObject() || !symbolResult.asObject(rt).isArray(rt) ||
-        symbolResult.asObject(rt).asArray(rt).size(rt) != 0) {
-      invalid(rt, "setGlobals does not accept symbol-keyed properties");
-    }
-    auto keysFunction = objectCtor.getPropertyAsFunction(rt, "keys");
-    auto keyResult = keysFunction.call(rt, jsi::Value(rt, object));
+    parser.requirePlainObject(object);
+    parser.rejectSymbolKeys(object);
+    auto keyResult = parser.objectKeys.call(rt, jsi::Value(rt, object));
     if (!keyResult.isObject() || !keyResult.asObject(rt).isArray(rt)) {
       invalid(rt, "Object.keys returned an invalid result");
     }

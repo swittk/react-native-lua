@@ -45,7 +45,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   link_args+=(-ldl)
 fi
 
-"${CXX:-c++}" -std=c++17 "${compile_flags[@]}" -pthread \
+"${CXX:-c++}" -std=c++17 -DRNLUA_TESTING "${compile_flags[@]}" -pthread \
   -I"$repo_dir/cpp" -I"$repo_dir/cpp/lua_src" \
   -I"$repo_dir/cpp/lua_luasocket" \
   "$repo_dir/cpp/LuaRuntime.cpp" "$repo_dir/cpp/LuaSocket.cpp" \
@@ -54,7 +54,7 @@ fi
 
 "$build_dir/lua-runtime-test"
 
-"${CXX:-c++}" -std=c++17 "${compile_flags[@]}" -pthread \
+"${CXX:-c++}" -std=c++17 -DRNLUA_TESTING "${compile_flags[@]}" -pthread \
   -I"$repo_dir/cpp" -I"$repo_dir/cpp/lua_src" \
   -I"$repo_dir/cpp/lua_luasocket" \
   "$repo_dir/cpp/LuaRuntime.cpp" "$repo_dir/cpp/LuaSocket.cpp" \
@@ -63,7 +63,7 @@ fi
 
 "$build_dir/lua-value-reader-test"
 
-"${CXX:-c++}" -std=c++17 "${compile_flags[@]}" -pthread \
+"${CXX:-c++}" -std=c++17 -DRNLUA_TESTING "${compile_flags[@]}" -pthread \
   -I"$repo_dir/cpp" -I"$repo_dir/cpp/lua_src" \
   -I"$repo_dir/cpp/lua_luasocket" \
   "$repo_dir/cpp/LuaRuntime.cpp" "$repo_dir/cpp/LuaSocket.cpp" \

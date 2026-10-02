@@ -23,7 +23,12 @@ case "$abi" in
 esac
 cxx_standard="${RNLUA_CXX_STANDARD:-17}"
 case "$cxx_standard" in 17|20) ;; *) echo "RNLUA_CXX_STANDARD must be 17 or 20" >&2; exit 2;; esac
-toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+case "$(uname -s)" in
+  Linux) host_tag=linux-x86_64 ;;
+  Darwin) host_tag=darwin-x86_64 ;;
+  *) echo "Unsupported host OS for Android NDK toolchain" >&2; exit 2 ;;
+esac
+toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$host_tag"
 cc="$toolchain/bin/${triple}${api}-clang"
 cxx="$toolchain/bin/${triple}${api}-clang++"
 mkdir -p "$build_dir/react" "$build_dir/hermes" "$build_dir/libs" "$build_dir/obj"

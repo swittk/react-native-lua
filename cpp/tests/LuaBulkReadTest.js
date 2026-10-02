@@ -128,6 +128,19 @@ lua.setGlobal('x\0set','nul');
 check(lua.readGlobal('x\0set')==='nul','embedded-null global name set');
 run(lua,'setmetatable(_G,nil)');
 
+lua.setGlobals({integer_semantics:3, negative_zero:-0, fractional_semantics:3.5,
+                unsafe_integral_semantics:9007199254740992});
+run(lua, "integer_kind=math.type(integer_semantics); integer_text=tostring(integer_semantics); " +
+         "negative_zero_kind=math.type(negative_zero); negative_zero_is_negative=(1/negative_zero)==-math.huge; " +
+         "fractional_kind=math.type(fractional_semantics); " +
+         "unsafe_integral_kind=math.type(unsafe_integral_semantics)");
+check(lua.readGlobal('integer_kind')==='integer' && lua.readGlobal('integer_text')==='3',
+      'safe integral JS numbers become Lua integers');
+check(lua.readGlobal('negative_zero_kind')==='float' && lua.readGlobal('negative_zero_is_negative')===true,
+      'negative zero remains a signed Lua float');
+check(lua.readGlobal('fractional_kind')==='float' && lua.readGlobal('unsafe_integral_kind')==='float',
+      'fractional and unsafe integral JS numbers remain Lua floats');
+
 // JS input is snapshotted completely before Lua mutation.
 run(lua,'tx_a=1;tx_b=2');
 const badBatch={tx_a:99,tx_b:()=>3};
@@ -138,12 +151,27 @@ rejects(()=>lua.pushValue(cyclicInput),/cyclic/);
 rejects(()=>lua.pushValue(undefined),/transferable/);
 rejects(()=>lua.pushValue(NaN),/finite/);
 rejects(()=>lua.pushValue(Infinity),/finite/);
+function ExampleInstance(){this.x=1;}
+for (const bad of [new Map([['x',1]]), new Set([1]), new Date(0), /x/,
+                   new ArrayBuffer(4), new Uint8Array([1,2]),
+                   new ExampleInstance()]) {
+  rejects(()=>lua.pushValue(bad),/plain objects/);
+}
+const nullProto=Object.create(null); nullProto.x=7;
+lua.pushValue(nullProto);
+check(lua.readValue(-1).x===7,'null-prototype object is transferable');
+lua.pop(1);
+rejects(()=>lua.setGlobals(new Map([['x',1]])),/plain objects/);
 const symbolInput={x:1}; symbolInput[Symbol('hidden')]=2;
 rejects(()=>lua.pushValue(symbolInput),/symbol/);
 const symbolGlobals={x:1}; symbolGlobals[Symbol('hidden')]=2;
 rejects(()=>lua.setGlobals(symbolGlobals),/symbol/);
 const sparseInput=[]; sparseInput.length=2; sparseInput[1]=4;
 rejects(()=>lua.pushValue(sparseInput),/sparse|undefined/);
+const decoratedArray=[1,2]; decoratedArray.extra=3;
+rejects(()=>lua.pushValue(decoratedArray),/extra enumerable|dense indexed/);
+const symbolArray=[1]; symbolArray[Symbol('hidden')]=2;
+rejects(()=>lua.pushValue(symbolArray),/symbol/);
 rejects(()=>lua.pushValues(Array(257).fill(1)),/256/);
 rejects(()=>lua.pushValue({x:{y:1}},{maxDepth:1}),/maxDepth/);
 rejects(()=>lua.pushValue({x:1},{maxEntries:0}),/maxEntries/);

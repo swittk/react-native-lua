@@ -64,7 +64,12 @@ void validateValues(
   ValidationBudget budget{limits};
   if (names) {
     if (names->size() != values.size()) invalid("global names/value count mismatch");
-    for (const auto& name : *names) budget.countString(name);
+    for (std::size_t i = 0; i < names->size(); ++i) {
+      for (std::size_t j = 0; j < i; ++j) {
+        if ((*names)[i] == (*names)[j]) invalid("duplicate global names are not supported");
+      }
+      budget.countString((*names)[i]);
+    }
   }
   for (const auto& value : values) budget.visit(value, 0);
 }
@@ -90,7 +95,13 @@ struct Writer {
         lua_pushboolean(L, value.boolean ? 1 : 0);
         return;
       case LuaValue::Kind::Number:
-        lua_pushnumber(L, value.number);
+        if (std::trunc(value.number) == value.number &&
+            std::fabs(value.number) <= 9007199254740991.0 &&
+            !(value.number == 0 && std::signbit(value.number))) {
+          lua_pushinteger(L, static_cast<lua_Integer>(value.number));
+        } else {
+          lua_pushnumber(L, value.number);
+        }
         return;
       case LuaValue::Kind::String:
         lua_pushlstring(L, value.text.data(), value.text.size());
@@ -192,14 +203,18 @@ struct Writer {
         }
       }
 
-      std::size_t committed = 0;
+      // Commit every non-nil value first. These are the only assignments that
+      // can allocate in Lua 5.4: luaH_newkey returns immediately for nil values.
+      // If one fails, rollback touches only keys that were never deleted:
+      // existing keys are overwritten in-place and newly inserted keys are
+      // restored to nil. Neither operation requires a table allocation.
       for (std::size_t i = 0; i < count; ++i) {
+        if (writer.values[i].kind == LuaValue::Kind::Null) continue;
         const lua_Integer slot = static_cast<lua_Integer>(i + 1);
         lua_pushcfunction(L, &Writer::rawSet);
         lua_pushvalue(L, globals);
         lua_rawgeti(L, stagedNames, slot);
-        if (writer.values[i].kind == LuaValue::Kind::Null) lua_pushnil(L);
-        else lua_rawgeti(L, newValues, slot);
+        lua_rawgeti(L, newValues, slot);
 
         const int status = lua_pcall(L, 3, 0, 0);
         if (status != LUA_OK) {
@@ -212,21 +227,29 @@ struct Writer {
           }
           lua_pop(L, 1);
 
-          // Roll back all assignments attempted so far. These keys already
-          // exist or are being deleted, so rollback requires no new key strings.
-          const std::size_t rollbackThrough = std::min(count, i + 1);
-          for (std::size_t j = 0; j < rollbackThrough; ++j) {
+          for (std::size_t j = 0; j <= i; ++j) {
+            if (writer.values[j].kind == LuaValue::Kind::Null) continue;
             const lua_Integer restoreSlot = static_cast<lua_Integer>(j + 1);
             lua_rawgeti(L, stagedNames, restoreSlot);
             lua_rawgeti(L, oldValues, restoreSlot);
             lua_rawset(L, globals);
           }
           throw std::runtime_error(
-              std::string("Lua bulk value push/set: ") + message);
+              std::string("Lua bulk value push/set: global assignment commit failed: ") +
+              message);
         }
-        committed = i + 1;
       }
-      (void)committed;
+
+      // Deletions cannot allocate (Lua 5.4's luaH_newkey returns before
+      // insertion for nil values), so perform them only after every potentially
+      // allocating assignment has succeeded.
+      for (std::size_t i = 0; i < count; ++i) {
+        if (writer.values[i].kind != LuaValue::Kind::Null) continue;
+        const lua_Integer slot = static_cast<lua_Integer>(i + 1);
+        lua_rawgeti(L, stagedNames, slot);
+        lua_pushnil(L);
+        lua_rawset(L, globals);
+      }
       lua_settop(L, originalTop);
     } catch (...) {
       writer.failure = std::current_exception();

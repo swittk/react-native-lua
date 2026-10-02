@@ -102,6 +102,14 @@ void* LuaRuntime::allocate(void* userData, void* pointer, std::size_t oldSize,
     return nullptr;
   }
 
+#ifdef RNLUA_TESTING
+  const std::int64_t failAfter = memory->failAfter.load(std::memory_order_relaxed);
+  if (failAfter == 0) return nullptr;
+  if (failAfter > 0) {
+    memory->failAfter.store(failAfter - 1, std::memory_order_relaxed);
+  }
+#endif
+
   const std::size_t used = memory->used.load(std::memory_order_relaxed);
   const std::size_t base = accountedOldSize > used ? 0 : used - accountedOldSize;
   const std::size_t limit = memory->limit.load(std::memory_order_relaxed);
@@ -438,6 +446,19 @@ std::size_t LuaRuntime::memoryUsedBytes() const noexcept {
 std::size_t LuaRuntime::peakMemoryBytes() const noexcept {
   return memory_.peak.load(std::memory_order_relaxed);
 }
+
+#ifdef RNLUA_TESTING
+void LuaRuntime::failAllocationsAfterForTesting(
+    std::int64_t successfulAllocations) noexcept {
+  memory_.failAfter.store(
+      std::max<std::int64_t>(0, successfulAllocations),
+      std::memory_order_relaxed);
+}
+
+void LuaRuntime::clearAllocationFailureForTesting() noexcept {
+  memory_.failAfter.store(-1, std::memory_order_relaxed);
+}
+#endif
 
 std::size_t LuaRuntime::maxOutputBytes() const noexcept {
   return options_.maxOutputBytes;
