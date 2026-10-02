@@ -21,6 +21,8 @@ list(REMOVE_ITEM LUA_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/lua_src/luac.c")
 
 set(RNLUA_SOURCES
+    ../cpp/LuaValueReader.cpp
+    ../cpp/LuaValueJsi.cpp
     ../cpp/LuaRuntime.cpp
     ../cpp/LuaSocket.cpp
     ../cpp/react-native-lua.cpp

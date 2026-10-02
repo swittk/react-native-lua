@@ -74,6 +74,29 @@ export interface LuaExecutionResult {
   outputTruncated: boolean;
 }
 
+/** Detached interoperable snapshot, not a handle to an arbitrary Lua value.
+ * Maps have null prototypes; object/array contents are not recursively frozen.
+ */
+export type LuaValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly LuaValue[]
+  | {readonly [key: string]: LuaValue};
+
+/** Shared budgets for one entire read, not budgets per root/table. */
+export interface LuaReadOptions {
+  /** Maximum table nesting. Default 32; range 0..64. */
+  maxDepth?: number;
+  /** Total table entries visited, counting repeated references. Default 16384; max 262144. */
+  maxEntries?: number;
+  /** Total UTF-8 bytes in names, keys and values. Default 1 MiB; max 16 MiB. */
+  maxStringBytes?: number;
+  /** Lua has no distinct empty-array type. Default 'object'. */
+  emptyTables?: 'object' | 'array';
+}
+
 /** Native JSI HostObject for one isolated Lua 5.4 interpreter. */
 interface NativeLuaInterpreter {
   dostring(source: string): number;
@@ -83,6 +106,23 @@ interface NativeLuaInterpreter {
   startStringAsync(source: string): number;
   startFileAsync(path: string): number;
   takeAsyncResult(taskId: number): LuaExecutionResult | null;
+
+  /** One protected native snapshot, without consuming/reordering stack entries.
+   * Indices refer to the stack at snapshot entry; pseudo-indices are rejected.
+   */
+  readValues<Indices extends readonly number[]>(
+    indices: Indices,
+    options?: LuaReadOptions
+  ): {readonly [K in keyof Indices]: LuaValue};
+  /** Raw global lookup, ignoring _G.__index. Missing names return null.
+   * At most 256 roots; rejects executing/destroyed interpreters.
+   */
+  readGlobals<Names extends readonly string[]>(
+    names: Names,
+    options?: LuaReadOptions
+  ): {readonly [K in Names[number]]: LuaValue};
+  readValue(index: number, options?: LuaReadOptions): LuaValue;
+  readGlobal(name: string, options?: LuaReadOptions): LuaValue;
 
   readonly printCount: number;
   getPrint(count?: number): string;

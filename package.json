@@ -14,6 +14,7 @@
     "ios",
     "cpp",
     "scripts",
+    "docs/bulk-value-readers.md",
     "codegenConfig.json",
     "react-native-lua.podspec",
     "!lib/typescript/example",
@@ -38,7 +39,8 @@
     "example:typecheck": "pnpm --filter react-native-lua-example exec tsc --noEmit",
     "example:android": "pnpm --filter react-native-lua-example android",
     "example:ios": "pnpm --filter react-native-lua-example ios",
-    "example:start": "pnpm --filter react-native-lua-example start"
+    "example:start": "pnpm --filter react-native-lua-example start",
+    "test:jsi:android": "bash scripts/test-jsi-android.sh"
   },
   "keywords": [
     "react-native",

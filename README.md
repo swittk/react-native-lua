@@ -146,3 +146,50 @@ pnpm example:ios
 
 MIT. The bundled LuaSocket sources are also MIT licensed and retain their
 upstream copyright notices.
+
+## Bulk value snapshots (unreleased)
+
+Use the synchronous native readers instead of walking a Lua table field by field
+through `pushstring` / `rawget` / `tonumber` / `pop` from JavaScript:
+
+```ts
+import {luaInterpreter, type LuaValue} from 'react-native-lua';
+
+const lua = luaInterpreter();
+await lua.executeStringAsync(`
+  output = {title = "Example", samples = {1, 2, 3}}
+  status = "ready"
+`);
+const {output, status} = lua.readGlobals(['output', 'status'] as const);
+// output and status are LuaValue; narrow/validate your application schema.
+
+lua.getglobal('output');
+const [first, second] = lua.readValues([-1, -1] as const);
+lua.pop(1); // readValues itself does not change the stack
+
+const one: LuaValue = lua.readGlobal('output');
+```
+
+`readValues`, `readGlobals`, `readValue`, and `readGlobal` each enter the native
+reader once. Conversion uses raw Lua reads, not JSON and not Lua metamethods.
+They return detached data, not live Lua references. Busy/destroyed interpreters
+reject the call; nothing waits for or interrupts a running worker. Keep your
+existing per-interpreter execution queue around execution plus output reading.
+
+The supported subset is `null` (Lua nil), booleans, finite numbers, valid UTF-8
+strings, dense arrays and string-keyed maps. Maps have **null prototypes**, so
+`__proto__` is an ordinary data key. Functions, userdata, coroutines, cycles, mixed
+keys and sparse arrays are rejected. Shared acyclic tables are copied. Unsafe
+Lua integers are rejected instead of silently rounded.
+
+Lua cannot distinguish an empty array from an empty map: `{}` becomes an object
+by default; pass `{emptyTables: 'array'}` to select arrays for empty tables.
+
+Limits cover the whole call: `maxDepth` (default 32, maximum 64), `maxEntries`
+(default 16,384, maximum 262,144), and `maxStringBytes` (default 1 MiB, maximum
+16 MiB; includes requested global names, table keys and values). Up to 256 roots
+may be requested. Lower limits, including zero, are supported.
+
+This is a native library addition: rebuild the consuming app after upgrading.
+No changes to Lua script syntax or callbacks are required. See
+[bulk reader semantics and tests](docs/bulk-value-readers.md).

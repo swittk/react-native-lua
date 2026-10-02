@@ -1,4 +1,5 @@
 #include "react-native-lua.h"
+#include "LuaValueJsi.h"
 
 #include <algorithm>
 #include <cmath>
@@ -507,6 +508,7 @@ const std::vector<std::string> kInterpreterKeys = {
     "dostringasync", "dofileasync", "dostring", "dofile", "printCount",
     "executeStringResult", "executeFileResult", "startStringAsync",
     "startFileAsync", "takeAsyncResult", "executing",
+    "readValues", "readGlobals", "readValue", "readGlobal",
     "getPrint", "getLatestError", "pop", "pushboolean", "pushglobaltable",
     "pushinteger", "pushnil", "pushnumber", "pushstring", "pushthread",
     "pushvalue", "rawequal", "rawget", "rawgeti", "rawlen", "rawset",
@@ -711,6 +713,40 @@ jsi::Value SKRNLuaInterpreter::get(
   }
   if (method == "outputTruncated") {
     return jsi::Value(lua_->outputWasTruncated());
+  }
+
+  if (method == "readValues" || method == "readGlobals" ||
+      method == "readValue" || method == "readGlobal") {
+    return makeHostFunction(runtime, name, 2, [self, method](
+        jsi::Runtime& runtime, const jsi::Value&, const jsi::Value* arguments,
+        std::size_t count) -> jsi::Value {
+      // Input accessors and result construction belong to JS, outside the Lua
+      // critical section. Snapshot everything before acquiring execution rights.
+      const auto request = rnlua::parseValueReadRequest(runtime, method, arguments, count);
+      const auto objectCreate = runtime.global().getPropertyAsObject(runtime, "Object")
+          .getPropertyAsFunction(runtime, "create");
+      if (self->destroyed_.load() || self->lua_ == nullptr) {
+        throw jsi::JSError(runtime, "Lua interpreter is destroyed");
+      }
+      bool expected = false;
+      if (!self->executing_.compare_exchange_strong(expected, true)) {
+        throw jsi::JSError(runtime, "Lua interpreter is executing; bulk reads require an idle interpreter");
+      }
+      std::vector<rnlua::LuaValue> values;
+      try {
+        values = request.globals
+            ? rnlua::readLuaGlobals(*self->lua_, request.names, request.options)
+            : rnlua::readLuaValues(*self->lua_, request.indices, request.options);
+      } catch (const std::exception& error) {
+        self->executing_.store(false);
+        throw jsi::JSError(runtime, error.what());
+      } catch (...) {
+        self->executing_.store(false);
+        throw jsi::JSError(runtime, "Lua bulk read failed");
+      }
+      self->executing_.store(false);
+      return rnlua::valueReadResult(runtime, request, values, objectCreate);
+    });
   }
 
   if (method == "getPrint") {
