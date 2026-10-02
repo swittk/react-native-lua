@@ -71,6 +71,11 @@ class LuaRuntime final {
   void setMemoryLimitBytes(std::size_t value) noexcept;
   std::size_t memoryUsedBytes() const noexcept;
   std::size_t peakMemoryBytes() const noexcept;
+#ifdef RNLUA_TESTING
+  // Native-test-only allocator failpoint. Production builds expose no such API.
+  void failAllocationsAfterForTesting(std::int64_t successfulAllocations) noexcept;
+  void clearAllocationFailureForTesting() noexcept;
+#endif
   std::size_t maxOutputBytes() const noexcept;
   void setMaxOutputBytes(std::size_t value) noexcept;
   std::size_t maxOutputLines() const noexcept;
@@ -100,6 +105,9 @@ class LuaRuntime final {
     std::atomic<std::size_t> used{0};
     std::atomic<std::size_t> peak{0};
     std::atomic<std::size_t> limit{0};
+#ifdef RNLUA_TESTING
+    std::atomic<std::int64_t> failAfter{-1};
+#endif
   };
 
   static void* allocate(void* userData, void* pointer, std::size_t oldSize,

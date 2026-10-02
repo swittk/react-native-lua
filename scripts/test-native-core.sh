@@ -5,6 +5,11 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="$(mktemp -d)"
 trap 'rm -rf "$build_dir"' EXIT
 
+compile_flags=(-O2)
+if [[ "${RNLUA_SANITIZE:-0}" == "1" ]]; then
+  compile_flags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
+fi
+
 lua_sources=()
 while IFS= read -r source; do
   lua_sources+=("$source")
@@ -27,7 +32,7 @@ fi
 
 (
   cd "$build_dir"
-  cc -std=c11 -O2 "${c_feature_flags[@]}" \
+  "${CC:-cc}" -std=c11 "${compile_flags[@]}" "${c_feature_flags[@]}" \
     -I"$repo_dir/cpp" \
     -I"$repo_dir/cpp/lua_src" \
     -I"$repo_dir/cpp/lua_luasocket" \
@@ -40,7 +45,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   link_args+=(-ldl)
 fi
 
-c++ -std=c++17 -O2 -pthread \
+"${CXX:-c++}" -std=c++17 -DRNLUA_TESTING "${compile_flags[@]}" -pthread \
   -I"$repo_dir/cpp" -I"$repo_dir/cpp/lua_src" \
   -I"$repo_dir/cpp/lua_luasocket" \
   "$repo_dir/cpp/LuaRuntime.cpp" "$repo_dir/cpp/LuaSocket.cpp" \
@@ -48,3 +53,22 @@ c++ -std=c++17 -O2 -pthread \
   "$build_dir"/*.o "${link_args[@]}" -o "$build_dir/lua-runtime-test"
 
 "$build_dir/lua-runtime-test"
+
+"${CXX:-c++}" -std=c++17 -DRNLUA_TESTING "${compile_flags[@]}" -pthread \
+  -I"$repo_dir/cpp" -I"$repo_dir/cpp/lua_src" \
+  -I"$repo_dir/cpp/lua_luasocket" \
+  "$repo_dir/cpp/LuaRuntime.cpp" "$repo_dir/cpp/LuaSocket.cpp" \
+  "$repo_dir/cpp/LuaValueReader.cpp" "$repo_dir/cpp/tests/LuaValueReaderTest.cpp" \
+  "$build_dir"/*.o "${link_args[@]}" -o "$build_dir/lua-value-reader-test"
+
+"$build_dir/lua-value-reader-test"
+
+"${CXX:-c++}" -std=c++17 -DRNLUA_TESTING "${compile_flags[@]}" -pthread \
+  -I"$repo_dir/cpp" -I"$repo_dir/cpp/lua_src" \
+  -I"$repo_dir/cpp/lua_luasocket" \
+  "$repo_dir/cpp/LuaRuntime.cpp" "$repo_dir/cpp/LuaSocket.cpp" \
+  "$repo_dir/cpp/LuaValueReader.cpp" "$repo_dir/cpp/LuaValueWriter.cpp" \
+  "$repo_dir/cpp/tests/LuaValueWriterTest.cpp" \
+  "$build_dir"/*.o "${link_args[@]}" -o "$build_dir/lua-value-writer-test"
+
+"$build_dir/lua-value-writer-test"
