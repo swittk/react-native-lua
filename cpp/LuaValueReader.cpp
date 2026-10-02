@@ -41,12 +41,16 @@ bool isValidUtf8(const char* bytes, std::size_t length) noexcept {
   return true;
 }
 
-void validateValueReadOptions(const ValueReadOptions& options) {
-  if (options.maxDepth > kMaxReadDepth ||
-      options.maxEntries > kMaxReadEntries ||
-      options.maxStringBytes > kMaxReadStringBytes) {
-    throw std::invalid_argument("Lua bulk read options exceed hard safety limits");
+void validateValueLimits(const ValueLimits& limits) {
+  if (limits.maxDepth > kMaxValueDepth ||
+      limits.maxEntries > kMaxValueEntries ||
+      limits.maxStringBytes > kMaxValueStringBytes) {
+    throw std::invalid_argument("Lua value limits exceed hard safety limits");
   }
+}
+
+void validateValueReadOptions(const ValueReadOptions& options) {
+  validateValueLimits(options);
 }
 
 namespace {

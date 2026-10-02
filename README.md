@@ -147,10 +147,11 @@ pnpm example:ios
 MIT. The bundled LuaSocket sources are also MIT licensed and retain their
 upstream copyright notices.
 
-## Bulk value snapshots (unreleased)
+## Bulk value transfer (unreleased)
 
-Use the synchronous native readers instead of walking a Lua table field by field
-through `pushstring` / `rawget` / `tonumber` / `pop` from JavaScript:
+Use the synchronous native bulk-value API instead of walking Lua tables field by field
+through `pushstring` / `rawget` / `tonumber` / `pop` from JavaScript. The
+stack-facing terminology follows Lua itself: values are **pushed** and globals are **set**.
 
 ```ts
 import {luaInterpreter, type LuaValue} from 'react-native-lua';
@@ -168,13 +169,27 @@ const [first, second] = lua.readValues([-1, -1] as const);
 lua.pop(1); // readValues itself does not change the stack
 
 const one: LuaValue = lua.readGlobal('output');
+
+// Host -> Lua, still one native traversal rather than per-field stack calls.
+lua.pushValue({message: 'hello', samples: [1, 2, 3]});
+lua.pushValues([42, 'ready']);
+
+lua.setGlobal('response', {ok: true});
+lua.setGlobals({status: 'ready', attempts: 3});
 ```
 
 `readValues`, `readGlobals`, `readValue`, and `readGlobal` each enter the native
-reader once. Conversion uses raw Lua reads, not JSON and not Lua metamethods.
-They return detached data, not live Lua references. Busy/destroyed interpreters
-reject the call; nothing waits for or interrupts a running worker. Keep your
-existing per-interpreter execution queue around execution plus output reading.
+reader once. `pushValue`, `pushValues`, `setGlobal`, and `setGlobals` likewise
+perform one native input conversion rather than recursively calling the low-level
+stack API from JavaScript. Reads use raw Lua access; global sets use raw assignment,
+so `_G.__index` / `_G.__newindex` are not invoked.
+
+Reads return detached data, not live Lua references. Push failures restore the
+original stack exactly. `setGlobals` snapshots and materializes the entire batch
+before assignment and rolls back already-applied names if native assignment fails.
+Busy/destroyed interpreters reject every bulk transfer; nothing waits for or
+interrupts a running worker. Keep your existing per-interpreter execution queue
+around execution plus any related read/push/set operation.
 
 The supported subset is `null` (Lua nil), booleans, finite numbers, valid UTF-8
 strings, dense arrays and string-keyed maps. Maps have **null prototypes**, so
@@ -191,5 +206,5 @@ Limits cover the whole call: `maxDepth` (default 32, maximum 64), `maxEntries`
 may be requested. Lower limits, including zero, are supported.
 
 This is a native library addition: rebuild the consuming app after upgrading.
-No changes to Lua script syntax or callbacks are required. See
-[bulk reader semantics and tests](docs/bulk-value-readers.md).
+No changes to Lua script syntax or callbacks are required. See [bulk reader semantics and tests](docs/bulk-value-readers.md) and
+[push/set semantics](docs/bulk-value-push-set.md).

@@ -62,3 +62,13 @@ fi
   "$build_dir"/*.o "${link_args[@]}" -o "$build_dir/lua-value-reader-test"
 
 "$build_dir/lua-value-reader-test"
+
+"${CXX:-c++}" -std=c++17 "${compile_flags[@]}" -pthread \
+  -I"$repo_dir/cpp" -I"$repo_dir/cpp/lua_src" \
+  -I"$repo_dir/cpp/lua_luasocket" \
+  "$repo_dir/cpp/LuaRuntime.cpp" "$repo_dir/cpp/LuaSocket.cpp" \
+  "$repo_dir/cpp/LuaValueReader.cpp" "$repo_dir/cpp/LuaValueWriter.cpp" \
+  "$repo_dir/cpp/tests/LuaValueWriterTest.cpp" \
+  "$build_dir"/*.o "${link_args[@]}" -o "$build_dir/lua-value-writer-test"
+
+"$build_dir/lua-value-writer-test"

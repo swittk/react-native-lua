@@ -102,6 +102,72 @@ try {
 finally { Object.create=originalCreate; }
 check(lua.readGlobal('a').x === 999, 'reentrant mutation happens after snapshot');
 
+
+// Bulk host -> Lua transfer uses Lua terminology: push stack values, set globals.
+const pushTop=lua.gettop();
+lua.pushValues([12.5,{hello:'world',items:[1,true,'x'],['__proto__']:{safe:true}},null]);
+check(lua.gettop()===pushTop+3,'pushValues leaves roots in order');
+const pushed=lua.readValues([-3,-2,-1]);
+check(pushed[0]===12.5 && pushed[1].hello==='world','pushValues roundtrip');
+equal(pushed[1].items,[1,true,'x'],'nested pushed array');
+check(pushed[1].__proto__.safe===true && !({}).safe,'push special keys are data');
+check(pushed[2]===null,'root null pushes nil');
+lua.settop(pushTop);
+lua.pushValue({single:9});
+check(lua.readValue(-1).single===9,'pushValue convenience');
+lua.pop(1);
+
+run(lua,'existing_set=10; removed_set=11; set_trap_calls=0; setmetatable(_G,{__newindex=function(t,k,v)set_trap_calls=set_trap_calls+1;rawset(t,k,v)end})');
+lua.setGlobals({existing_set:20,fresh_set:{ok:true},removed_set:null});
+check(lua.readGlobal('existing_set')===20 && lua.readGlobal('fresh_set').ok===true,'setGlobals assigns values');
+check(lua.readGlobal('removed_set')===null,'setGlobal null clears global');
+check(lua.readGlobal('set_trap_calls')===0,'setGlobals bypasses __newindex');
+lua.setGlobal('single_set',{value:42});
+check(lua.readGlobal('single_set').value===42,'setGlobal convenience');
+lua.setGlobal('x\0set','nul');
+check(lua.readGlobal('x\0set')==='nul','embedded-null global name set');
+run(lua,'setmetatable(_G,nil)');
+
+// JS input is snapshotted completely before Lua mutation.
+run(lua,'tx_a=1;tx_b=2');
+const badBatch={tx_a:99,tx_b:()=>3};
+rejects(()=>lua.setGlobals(badBatch),/function|transferable/);
+check(lua.readGlobal('tx_a')===1 && lua.readGlobal('tx_b')===2,'invalid setGlobals mutates nothing');
+const cyclicInput={}; cyclicInput.self=cyclicInput;
+rejects(()=>lua.pushValue(cyclicInput),/cyclic/);
+rejects(()=>lua.pushValue(undefined),/transferable/);
+rejects(()=>lua.pushValue(NaN),/finite/);
+rejects(()=>lua.pushValue(Infinity),/finite/);
+const symbolInput={x:1}; symbolInput[Symbol('hidden')]=2;
+rejects(()=>lua.pushValue(symbolInput),/symbol/);
+const symbolGlobals={x:1}; symbolGlobals[Symbol('hidden')]=2;
+rejects(()=>lua.setGlobals(symbolGlobals),/symbol/);
+const sparseInput=[]; sparseInput.length=2; sparseInput[1]=4;
+rejects(()=>lua.pushValue(sparseInput),/sparse|undefined/);
+rejects(()=>lua.pushValues(Array(257).fill(1)),/256/);
+rejects(()=>lua.pushValue({x:{y:1}},{maxDepth:1}),/maxDepth/);
+rejects(()=>lua.pushValue({x:1},{maxEntries:0}),/maxEntries/);
+rejects(()=>lua.pushValue({x:1},{emptyTables:'array'}),/read-only/);
+check(lua.gettop()===pushTop,'failed pushes restore stack');
+
+// Getters/proxies run before the Lua gate; a reentrant worker makes the transfer reject.
+run(lua,'reentrant_set=5');
+task=0;
+const reentrantInput={get value(){task=lua.startStringAsync('while true do end');return 7;}};
+rejects(()=>lua.setGlobals({reentrant_set:reentrantInput}),/executing/);
+lua.cancel(); wait(lua,task);
+check(lua.readGlobal('reentrant_set')===5,'busy reentrant set mutates nothing');
+
+// Busy push/set reject immediately; an independent interpreter remains usable.
+task=lua.startStringAsync('while true do end');
+rejects(()=>lua.pushValue(1),/executing/);
+rejects(()=>lua.pushValues([]),/executing/);
+rejects(()=>lua.setGlobal('busy_set',1),/executing/);
+rejects(()=>lua.setGlobals({busy_set:1}),/executing/);
+other.setGlobal('writer_other',77);
+check(other.readGlobal('writer_other')===77,'idle second interpreter can set while another is busy');
+lua.cancel(); wait(lua,task);
+
 run(lua, `frame={version=1,revision=1,width=320,height=420,background='#071126',commands={}}
 for i=1,20 do frame.commands[i]={id='brick-'..i,type='rect',x=i,y=3,width=44,height=18,radius=3,
 paint={style='fill',color='#FB7185'}} end`);
@@ -154,7 +220,8 @@ __log('BULK_READ_BENCH '+JSON.stringify({bulk:bench(()=>lua.readGlobal('frame'))
   fineRepeat:bench(fineRead),bulkRepeat:bench(()=>lua.readGlobal('frame'))}));
 
 other.destroy();
-for(const fn of [()=>other.readGlobal('a'),()=>other.readGlobals([]),()=>other.readValue(1),()=>other.readValues([])])
+for(const fn of [()=>other.readGlobal('a'),()=>other.readGlobals([]),()=>other.readValue(1),()=>other.readValues([]),
+  ()=>other.pushValue(1),()=>other.pushValues([]),()=>other.setGlobal('x',1),()=>other.setGlobals({x:1})])
   rejects(fn,/destroyed/);
 lua.destroy();
-__log('BULK_READ_ASSERTIONS '+assertions);
+__log('BULK_VALUE_ASSERTIONS '+assertions);

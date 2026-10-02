@@ -46,6 +46,7 @@ while IFS= read -r f; do lua_sources+=("$f"); done < <(
   -I"$build_dir/hermes/prefab/modules/libhermes/include" \
   "$repo_dir/cpp/LuaRuntime.cpp" "$repo_dir/cpp/LuaSocket.cpp" \
   "$repo_dir/cpp/LuaValueReader.cpp" "$repo_dir/cpp/LuaValueJsi.cpp" \
+  "$repo_dir/cpp/LuaValueInputJsi.cpp" "$repo_dir/cpp/LuaValueWriter.cpp" \
   "$repo_dir/cpp/react-native-lua.cpp" "$repo_dir/cpp/tests/LuaBulkJsiTest.cpp" \
   "$build_dir/obj"/*.o -L"$build_dir/libs" -lhermes -ljsi -llog -ldl -lm \
   -o "$build_dir/bulk-jsi-test"

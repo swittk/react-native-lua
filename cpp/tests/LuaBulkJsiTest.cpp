@@ -40,5 +40,5 @@ int main(int argc, char** argv) {
     return 1;
   }
   SKRNNativeLua::cleanup(*runtime);
-  std::cout << "Native Hermes/JSI bulk reader suite passed" << std::endl;
+  std::cout << "Native Hermes/JSI bulk value suite passed" << std::endl;
 }

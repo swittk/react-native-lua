@@ -19,3 +19,19 @@ lua.readGlobal('output', {maxDepth: 12, maxEntries: 4096, maxStringBytes: 65536}
 void checkedPair;
 void checkedGraphics;
 void notANumber;
+
+const payload: LuaValue = {message: 'hello', values: [1, true, null]};
+lua.pushValue(payload);
+lua.pushValues([payload, 3, 'x'] as const, {maxDepth: 8});
+lua.setGlobal('output', payload);
+lua.setGlobals({graphics: payload, status: 'ready'}, {maxEntries: 100});
+// @ts-expect-error undefined is outside LuaValue
+lua.pushValue(undefined);
+// @ts-expect-error pushValues requires transferable LuaValue roots
+lua.pushValues([()=>1]);
+// @ts-expect-error setGlobal names are strings
+lua.setGlobal(123, payload);
+// @ts-expect-error setGlobals values must be LuaValue
+lua.setGlobals({bad: Symbol('x')});
+// @ts-expect-error emptyTables is a read-only policy, not a push/set limit
+lua.pushValue(payload, {emptyTables: 'array'});

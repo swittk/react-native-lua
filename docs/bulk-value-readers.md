@@ -84,3 +84,9 @@ JS reentrancy, prototype keys and an equivalent-payload extraction benchmark.
 For React Native versions requiring C++20, set `RNLUA_CXX_STANDARD=20`.
 Temporary native binaries/libraries under `/data/local/tmp` are removed on exit.
 This benchmark measures extraction only, not application frame rate or GPU work.
+
+## Host -> Lua counterpart
+
+The symmetric host-input API uses Lua terminology: `pushValue` / `pushValues`
+for stack values and `setGlobal` / `setGlobals` for globals. See
+[bounded Lua value push/set](bulk-value-push-set.md).

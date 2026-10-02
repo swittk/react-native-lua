@@ -15,6 +15,7 @@
     "cpp",
     "scripts",
     "docs/bulk-value-readers.md",
+    "docs/bulk-value-push-set.md",
     "codegenConfig.json",
     "react-native-lua.podspec",
     "!lib/typescript/example",

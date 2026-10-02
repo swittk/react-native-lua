@@ -23,6 +23,8 @@ list(REMOVE_ITEM LUA_SOURCES
 set(RNLUA_SOURCES
     ../cpp/LuaValueReader.cpp
     ../cpp/LuaValueJsi.cpp
+    ../cpp/LuaValueInputJsi.cpp
+    ../cpp/LuaValueWriter.cpp
     ../cpp/LuaRuntime.cpp
     ../cpp/LuaSocket.cpp
     ../cpp/react-native-lua.cpp
